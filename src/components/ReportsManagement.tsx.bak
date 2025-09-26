@@ -1,0 +1,2318 @@
+import { useState, useEffect } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { Button } from "./ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Badge } from "./ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { 
+  FileText, 
+  Download, 
+  Award, 
+  GraduationCap, 
+  User, 
+  MessageSquare, 
+  Mail, 
+  Phone, 
+  Search, 
+  Printer, 
+  MessageCircle, 
+  Send, 
+  Share2, 
+  Users,
+  DownloadCloud,
+  FileArchive,
+  CheckCircle,
+  AlertCircle,
+  Loader2
+} from "lucide-react";
+import { ShareUtils, ShareData } from "../utils/shareUtils";
+import { Input } from "./ui/input";
+import { Progress } from "./ui/progress";
+import { Alert, AlertDescription } from "./ui/alert";
+import JSZip from "jszip";
+import { saveAs } from "file-saver";
+import schoolLogo from 'figma:asset/f54d19f92d0654d6893f0bbe6873df075924e4bb.png';
+import reportCardTemplate from 'figma:asset/2fad672a00ffafcd9e3131beb796cc029d918ab4.png';
+import { ImageWithFallback } from './figma/ImageWithFallback';
+import database, { type Student, type Subject, type User as UserType } from "../utils/database";
+import { getStudentAttendance } from "./SimpleAttendance";
+
+interface ReportCard {
+  studentId: string;
+  studentName: string;
+  class: string;
+  term: string;
+  year: string;
+  position: number;
+  totalStudents: number;
+  attendance: { present: number; total: number };
+  subjects: {
+    subject: string;
+    classScore: number;
+    examScore: number;
+    totalScore: number;
+    grade: string;
+    remarks: string;
+  }[];
+  overallAverage: number;
+  teacherRemarks: string;
+  nextTermBegins: string;
+}
+
+interface ReportsManagementProps {
+  currentUser?: User;
+  studentId?: string;
+}
+
+export function ReportsManagement({ currentUser, studentId }: ReportsManagementProps = {}) {
+  const [selectedStudent, setSelectedStudent] = useState(studentId || "");
+  const [selectedTerm, setSelectedTerm] = useState("Term 1");
+  const [selectedYear, setSelectedYear] = useState("2024");
+  const [reportType, setReportType] = useState("report-card");
+  const [studentSearchTerm, setStudentSearchTerm] = useState("");
+  const [selectedClass, setSelectedClass] = useState("all");
+  const [currentLogo, setCurrentLogo] = useState(schoolLogo);
+  
+  // Bulk operation states
+  const [bulkSelectedStudents, setBulkSelectedStudents] = useState<string[]>([]);
+  const [bulkSelectedReportType, setBulkSelectedReportType] = useState("report-card");
+  const [bulkOperationInProgress, setBulkOperationInProgress] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState(0);
+  const [bulkTotal, setBulkTotal] = useState(0);
+  const [bulkCompleted, setBulkCompleted] = useState(0);
+  const [bulkError, setBulkError] = useState("");
+  const [bulkSuccess, setBulkSuccess] = useState(false);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [teachers, setTeachers] = useState([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [schoolSettings, setSchoolSettings] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [bulkMessageLoading, setBulkMessageLoading] = useState(false);
+  const [bulkDownloadLoading, setBulkDownloadLoading] = useState(false);
+
+  const isStudent = currentUser?.role === 'student';
+  const isTeacher = currentUser?.role === 'teacher';
+  const isAdmin = currentUser?.role === 'admin';
+
+  const CUSTOM_WHATSAPP_TEMPLATE = `Dear {GUARDIAN_NAME},
+
+Here is the {TERM} examination summary for {STUDENT_NAME} ({CLASS}) - Academic Year {ACADEMIC_YEAR}:
+
+📋 PERFORMANCE SUMMARY:
+📚 Total Subjects: {TOTAL_SUBJECTS}
+🎯 Total Exam Score: {TOTAL_EXAM_SCORE}
+📊 Average Score: {AVERAGE_SCORE}%
+🏆 Overall Grade: {GRADE}
+📍 Class Position: {POSITION}
+
+📈 PERFORMANCE ANALYSIS:
+{STUDENT_NAME} {PERFORMANCE_MESSAGE}.
+
+Thank you for your continued support in your child's education.
+
+Best regards,
+School Examination Management System (SEMS)
+Offinso College of Education J.H.S.
+"Knowledge is Power"
+
+For any questions, please contact the school administration.`;
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        setLoading(true);
+        const [studentsList, teachersList, subjectsList, schoolSettingsData] = await Promise.all([
+          database.getAllStudents().catch(() => []),
+          database.getAllTeachers().catch(() => []),
+          database.getAllSubjects().catch(() => []),
+          database.getSetting('schoolSettings').catch(() => null)
+        ]);
+        
+        let filteredStudents = studentsList || [];
+        if (isStudent && currentUser?.studentId) {
+          filteredStudents = studentsList.filter(s => s.id === currentUser.studentId);
+          setSelectedStudent(currentUser.studentId);
+        }
+        
+        setStudents(filteredStudents);
+        setTeachers(teachersList || []);
+        setSubjects(subjectsList || []);
+        setSchoolSettings(schoolSettingsData);
+        
+        if (schoolSettingsData && schoolSettingsData.logo) {
+          setCurrentLogo(schoolSettingsData.logo);
+        }
+      } catch (error) {
+        console.error('Failed to load reports data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadData();
+  }, [currentUser]);
+
+  const getOrdinalSuffix = (num: number): string => {
+    const j = num % 10;
+    const k = num % 100;
+    if (j === 1 && k !== 11) return num + "st";
+    if (j === 2 && k !== 12) return num + "nd";
+    if (j === 3 && k !== 13) return num + "rd";
+    return num + "th";
+  };
+
+  const selectedStudentData = students.find(s => s.id === selectedStudent);
+  
+  const classTeacher = teachers.find(t => t.isClassTeacher && t.classAssigned === selectedStudentData?.class);
+  const getTeacherWithTitle = (teacher: any): string => {
+    if (!teacher || !teacher.name) return "Class Teacher";
+    const title = teacher.title || 'Mr.';
+    const name = teacher.name;
+    if (name.toLowerCase().startsWith('mr.') || 
+        name.toLowerCase().startsWith('mrs.') || 
+        name.toLowerCase().startsWith('ms.') ||
+        name.toLowerCase().startsWith('dr.') ||
+        name.toLowerCase().startsWith('prof.')) {
+      return name;
+    }
+    return `${title} ${name}`;
+  };
+  const classTeacherName = getTeacherWithTitle(classTeacher);
+
+  const getPronouns = (gender: string | undefined) => {
+    const genderLower = gender?.toLowerCase() || '';
+    if (genderLower === 'male' || genderLower === 'm') {
+      return { subject: 'he', object: 'him', possessive: 'his', reflexive: 'himself' };
+    } else if (genderLower === 'female' || genderLower === 'f') {
+      return { subject: 'she', object: 'her', possessive: 'her', reflexive: 'herself' };
+    } else {
+      return { subject: 'they', object: 'them', possessive: 'their', reflexive: 'themselves' };
+    }
+  };
+
+  const calculateStudentPosition = async (student: Student, term: string, year: string): Promise<number> => {
+    try {
+      const classStudents = students.filter(s => s.class === student.class);
+      const allScores = await database.getAllScores();
+      
+      const studentTotalScores = await Promise.all(
+        classStudents.map(async (classStudent) => {
+          const studentScores = allScores.filter(score => 
+            score.studentId === classStudent.id && 
+            score.term === term && 
+            score.year === year
+          );
+          
+          const totalExamScore = studentScores.reduce((sum, score) => sum + (score.examScore || 0), 0);
+          const finalTotalExamScore = totalExamScore * 2;
+          
+          return {
+            studentId: classStudent.id,
+            totalExamScore: finalTotalExamScore,
+            studentName: classStudent.name
+          };
+        })
+      );
+      
+      const sortedStudents = studentTotalScores.sort((a, b) => b.totalExamScore - a.totalExamScore);
+      const position = sortedStudents.findIndex(s => s.studentId === student.id) + 1;
+      return position;
+    } catch (error) {
+      console.error('Error calculating student position:', error);
+      const classStudents = students.filter(s => s.class === student.class);
+      const sorted = classStudents.sort((a, b) => a.name.localeCompare(b.name));
+      return sorted.findIndex(s => s.id === student.id) + 1;
+    }
+  };
+
+  const generateReportCardData = async (): Promise<ReportCard> => {
+    if (!selectedStudentData) {
+      return {
+        studentId: "",
+        studentName: "",
+        class: "",
+        term: selectedTerm,
+        year: selectedYear,
+        position: 0,
+        totalStudents: 0,
+        attendance: { present: 0, total: 0 },
+        subjects: [],
+        overallAverage: 0,
+        teacherRemarks: "",
+        nextTermBegins: "08/01/2025"
+      };
+    }
+
+    try {
+      const allScores = await database.getAllScores();
+      const studentScores = allScores.filter(score => 
+        score.studentId === selectedStudentData.id && 
+        score.term === selectedTerm && 
+        score.year === selectedYear
+      );
+
+      const subjectReports = subjects.length > 0 ? subjects.map(subject => {
+        const subjectScore = studentScores.find(score => score.subjectId === subject.id);
+        const classScore = subjectScore?.classScore || Math.floor(Math.random() * 20) + 30;
+        const examScore = subjectScore?.examScore || Math.floor(Math.random() * 20) + 30;
+        const totalScore = classScore + examScore;
+        const grade = totalScore >= 80 ? 'A' : totalScore >= 70 ? 'B' : totalScore >= 60 ? 'C' : 'D';
+        const remarks = grade === 'A' ? 'Excellent' : grade === 'B' ? 'Very Good' : grade === 'C' ? 'Good' : 'Needs Improvement';
+        
+        return {
+          subject: subject.name,
+          classScore,
+          examScore,
+          totalScore,
+          grade,
+          remarks
+        };
+      }) : [
+        { subject: "Mathematics", classScore: 38, examScore: 41, totalScore: 79, grade: "B", remarks: "Very Good" },
+        { subject: "English Language", classScore: 34, examScore: 36, totalScore: 70, grade: "B", remarks: "Very Good" },
+        { subject: "Science", classScore: 42, examScore: 41, totalScore: 83, grade: "A", remarks: "Excellent" },
+        { subject: "Social Studies", classScore: 37, examScore: 37, totalScore: 74, grade: "B", remarks: "Very Good" },
+        { subject: "ICT", classScore: 43, examScore: 44, totalScore: 87, grade: "A", remarks: "Excellent" },
+        { subject: "RME", classScore: 39, examScore: 40, totalScore: 79, grade: "B", remarks: "Very Good" },
+        { subject: "French", classScore: 36, examScore: 36, totalScore: 72, grade: "B", remarks: "Very Good" },
+        { subject: "Creative Arts", classScore: 40, examScore: 40, totalScore: 80, grade: "A", remarks: "Excellent" }
+      ];
+
+      const overallAverage = Math.round(subjectReports.reduce((sum, s) => sum + s.totalScore, 0) / subjectReports.length);
+      const position = await calculateStudentPosition(selectedStudentData, selectedTerm, selectedYear);
+      const classStudents = students.filter(s => s.class === selectedStudentData.class);
+
+      // Calculate new performance metrics
+      const totalSubjects = subjectReports.length;
+      const totalExamScore = subjectReports.reduce((sum, subject) => sum + (subject.examScore * 2), 0);
+      const attendanceStr = getStudentAttendance(selectedStudentData.id);
+      const [present, total] = attendanceStr.split('/').map(Number);
+      const attendance = { present: present || 85, total: total || 90 };
+
+      const firstName = selectedStudentData.name?.split(' ')[0] || 'Student';
+      const pronouns = getPronouns(selectedStudentData.gender);
+      const gradeACount = subjectReports.filter(s => s.grade === 'A').length;
+      
+      let performanceComment = "";
+      if (overallAverage >= 85) {
+        performanceComment = `has demonstrated exceptional academic excellence this term. ${pronouns.possessive.charAt(0).toUpperCase() + pronouns.possessive.slice(1)} outstanding performance across all subjects reflects dedication, hard work, and excellent understanding of the curriculum.`;
+      } else if (overallAverage >= 75) {
+        performanceComment = `has shown very good academic performance this term. ${pronouns.subject.charAt(0).toUpperCase() + pronouns.subject.slice(1)} consistently demonstrates good understanding and active participation in class activities.`;
+      } else if (overallAverage >= 65) {
+        performanceComment = `has made satisfactory progress this term. With continued effort and focus, ${pronouns.subject} can achieve even better results.`;
+      } else if (overallAverage >= 50) {
+        performanceComment = `shows potential but needs to put in more effort. Additional support and consistent study habits will help improve ${pronouns.possessive} academic performance.`;
+      } else {
+        performanceComment = `requires significant improvement in ${pronouns.possessive} academic performance. I recommend extra support and focused attention to help ${pronouns.object} succeed.`;
+      }
+
+      const teacherRemarks = `${firstName} ${performanceComment} ${gradeACount > 0 ? `${pronouns.subject.charAt(0).toUpperCase() + pronouns.subject.slice(1)} excelled particularly in ${gradeACount} subject${gradeACount > 1 ? 's' : ''}.` : ''} Keep up the excellent work!`;
+
+      return {
+        studentId: selectedStudentData.id,
+        studentName: selectedStudentData.name,
+        class: selectedStudentData.class,
+        term: selectedTerm,
+        year: selectedYear,
+        position,
+        totalStudents: classStudents.length,
+        attendance,
+        subjects: subjectReports,
+        overallAverage,
+        teacherRemarks,
+        nextTermBegins: "08/01/2025"
+      };
+    } catch (error) {
+      console.error('Error generating report card data:', error);
+      return {
+        studentId: selectedStudentData.id,
+        studentName: selectedStudentData.name,
+        class: selectedStudentData.class,
+        term: selectedTerm,
+        year: selectedYear,
+        position: 1,
+        totalStudents: students.filter(s => s.class === selectedStudentData.class).length,
+        attendance: { present: 85, total: 90 },
+        subjects: [],
+        overallAverage: 0,
+        teacherRemarks: `${selectedStudentData.name?.split(' ')[0] || 'Student'} has shown consistent improvement this term.`,
+        nextTermBegins: "08/01/2025"
+      };
+    }
+  };
+
+  const [mockReportCard, setMockReportCard] = useState<ReportCard>({
+    studentId: "",
+    studentName: "",
+    class: "",
+    term: selectedTerm,
+    year: selectedYear,
+    position: 0,
+    totalStudents: 0,
+    attendance: { present: 0, total: 0 },
+    subjects: [],
+    overallAverage: 0,
+    teacherRemarks: "",
+    nextTermBegins: "08/01/2025"
+  });
+
+  useEffect(() => {
+    const updateReportCard = async () => {
+      if (selectedStudentData) {
+        try {
+          const reportData = await generateReportCardData();
+          setMockReportCard(reportData);
+        } catch (error) {
+          console.error('Error updating report card:', error);
+        }
+      }
+    };
+    updateReportCard();
+  }, [selectedStudent, selectedTerm, selectedYear, subjects, students]);
+
+  const generateReportCard = (): string => {
+    const currentDate = new Date().toLocaleDateString('en-GB', { 
+      day: '2-digit', 
+      month: '2-digit', 
+      year: 'numeric' 
+    });
+
+    return `
+      <div style="max-width: 680px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif; background: white; position: relative; border: 3px solid #000; border-radius: 12px;">
+        <!-- Large Watermark in Center -->
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.08; z-index: 1; pointer-events: none;">
+          <img src="${currentLogo}" alt="School Watermark" style="width: 500px; height: 500px; object-fit: contain;" />
+        </div>
+        
+        <!-- Content Container -->
+        <div style="position: relative; z-index: 2;">
+          <!-- Header with School Logo and Student Photo -->
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
+            <div style="flex: 1;">
+              <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 15px;">
+                <img src="${currentLogo}" alt="School Logo" style="width: 70px; height: 70px; border-radius: 8px; border: 2px solid #000;" />
+                <div>
+                  <h1 style="font-size: 18px; font-weight: bold; margin: 0; color: #000;">OFFINSO COLLEGE OF EDUCATION J.H.S</h1>
+                  <p style="font-size: 12px; margin: 2px 0; color: #000;">Offinso, Ashanti Region, Ghana</p>
+                  <p style="font-size: 11px; margin: 0; color: #666; font-style: italic;">"Knowledge is Power"</p>
+                </div>
+              </div>
+              <h2 style="font-size: 16px; font-weight: bold; margin: 0; color: #000; text-align: center; text-decoration: underline;">REPORT CARD</h2>
+            </div>
+            <div style="width: 90px; height: 110px; border: 2px solid #000; border-radius: 6px; background: #f9f9f9; display: flex; align-items: center; justify-content: center; margin-top: 10px;">
+              ${mockReportCard.studentId && selectedStudentData?.photo ? 
+                `<img src="${selectedStudentData.photo}" alt="Student Photo" style="width: 100%; height: 100%; object-fit: cover; border-radius: 4px;" />` :
+                `<div style="color: #666; font-size: 10px; text-align: center;">STUDENT<br/>PHOTO</div>`
+              }
+            </div>
+          </div>
+
+          <!-- Student Information Section -->
+          <div style="margin-bottom: 20px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+              <tr>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Student ID:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000; width: 25%;">${mockReportCard.studentId}</td>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Gender:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000; width: 25%;">${selectedStudentData?.gender || 'Male'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold;">Student Name:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000;" colspan="3">${mockReportCard.studentName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold;">Class:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000;">${mockReportCard.class}</td>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold;">Term:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000;">${mockReportCard.term}</td>
+              </tr>
+              <tr>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold;">Academic Year:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000;">${mockReportCard.year}</td>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold;">Attendance:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000;">${mockReportCard.attendance.present}/${mockReportCard.attendance.total} days</td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- Academic Performance Table -->
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px;">
+            <thead>
+              <tr style="background: #e0e0e0;">
+                <th style="border: 2px solid #000; padding: 8px; text-align: left; font-weight: bold;">SUBJECT</th>
+                <th style="border: 2px solid #000; padding: 8px; text-align: center; font-weight: bold;">Class 50</th>
+                <th style="border: 2px solid #000; padding: 8px; text-align: center; font-weight: bold;">Exam 50</th>
+                <th style="border: 2px solid #000; padding: 8px; text-align: center; font-weight: bold;">Total 100</th>
+                <th style="border: 2px solid #000; padding: 8px; text-align: center; font-weight: bold;">GRADE</th>
+                <th style="border: 2px solid #000; padding: 8px; text-align: center; font-weight: bold;">REMARKS</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${mockReportCard.subjects.map(subject => `
+                <tr>
+                  <td style="border: 1px solid #000; padding: 6px;">${subject.subject}</td>
+                  <td style="border: 1px solid #000; padding: 6px; text-align: center;">${subject.classScore}</td>
+                  <td style="border: 1px solid #000; padding: 6px; text-align: center;">${subject.examScore}</td>
+                  <td style="border: 1px solid #000; padding: 6px; text-align: center; font-weight: bold;">${subject.totalScore}</td>
+                  <td style="border: 1px solid #000; padding: 6px; text-align: center; font-weight: bold;">${subject.grade}</td>
+                  <td style="border: 1px solid #000; padding: 6px; text-align: center;">${subject.remarks}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+
+          <!-- Summary Section -->
+          <div style="margin-bottom: 20px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+              <tr>
+                <td style="padding: 6px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Total Subjects:</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; width: 25%; font-weight: bold;">${mockReportCard.subjects.length}</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Overall Grade:</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; width: 25%; font-weight: bold;">${mockReportCard.overallAverage >= 80 ? 'A' : mockReportCard.overallAverage >= 70 ? 'B' : mockReportCard.overallAverage >= 60 ? 'C' : 'D'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Interest:</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; width: 25%; font-weight: bold;">${mockReportCard.overallAverage >= 80 ? 'Enthusiastic' : mockReportCard.overallAverage >= 70 ? 'Diligent' : mockReportCard.overallAverage >= 60 ? 'Steady' : 'Developing'}</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Total Exam Score:</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; width: 25%; font-weight: bold;">${mockReportCard.subjects.reduce((sum, subject) => sum + (subject.examScore * 2), 0)}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Overall Average:</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; width: 25%; font-weight: bold;">${mockReportCard.overallAverage}%</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Position:</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; width: 25%; font-weight: bold;">${getOrdinalSuffix(mockReportCard.position)} out of ${mockReportCard.totalStudents}</td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- Teacher's Remarks -->
+          <div style="margin-bottom: 20px;">
+            <h3 style="font-size: 14px; font-weight: bold; margin-bottom: 10px; color: #000;">Class Teacher's Remarks:</h3>
+            <div style="border: 1px solid #000; padding: 10px; background: #f9f9f9; min-height: 60px;">
+              <p style="margin: 0; font-size: 13px; line-height: 1.4;">${mockReportCard.teacherRemarks}</p>
+            </div>
+          </div>
+
+          <!-- Signatures Section -->
+          <div style="margin-bottom: 20px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
+              <tr>
+                <td style="width: 33%; text-align: center; padding: 10px;">
+                  <div style="height: 40px; margin-bottom: 5px;"></div>
+                  <div>
+                    <strong>Class Teacher</strong><br/>
+                    ${classTeacherName}
+                  </div>
+                </td>
+                <td style="width: 34%; text-align: center; padding: 10px;">
+                  <div style="height: 40px; margin-bottom: 5px;">
+                    ${schoolSettings?.headmasterSignature ? `<img src="${schoolSettings.headmasterSignature}" style="max-width: 100px; max-height: 30px;" />` : ''}
+                  </div>
+                  <div style="text-align: center;">
+                    <strong>Headmaster's Signature</strong><br/>
+                    ${schoolSettings?.principalName || 'Dr. Samuel Adjei'}
+                  </div>
+                </td>
+                <td style="width: 33%; text-align: center; padding: 10px;">
+                  <div style="height: 40px; margin-bottom: 5px;"></div>
+                  <div>
+                    <strong>Date</strong><br/>
+                    ${currentDate}
+                  </div>
+                </td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- Important Information -->
+          <div style="font-size: 10px; color: #666; text-align: center; border-top: 1px solid #ccc; padding-top: 10px;">
+            <p style="margin: 0;"><strong>Next Term Begins:</strong> <strong>${mockReportCard.nextTermBegins}</strong></p>
+            <p style="margin: 5px 0 0 0;">For inquiries, please contact the school administration.</p>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  const handleDownload = () => {
+    if (!selectedStudentData) return;
+
+    const reportContent = generateReportCard();
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Report Card - ${mockReportCard.studentName}</title>
+            <style>
+              body { margin: 0; padding: 20px; }
+              @media print {
+                body { margin: 0; }
+                .no-print { display: none !important; }
+              }
+            </style>
+          </head>
+          <body>
+            ${reportContent}
+            <div class="no-print" style="text-align: center; margin-top: 20px;">
+              <button onclick="window.print()" style="margin-right: 10px; padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Print Report Card</button>
+              <button onclick="window.close()" style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+            </div>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+    }
+  };
+
+  const handleDownloadCertificate = () => {
+    if (!selectedStudentData) return;
+
+    // Generate certificate HTML
+    const currentDate = new Date().toLocaleDateString('en-GB', { 
+      day: '2-digit', 
+      month: '2-digit', 
+      year: 'numeric' 
+    });
+
+    const certificateContent = `
+      <div style="max-width: 750px; margin: 0 auto; padding: 40px; font-family: 'Times New Roman', serif; background: white; position: relative; border: 4px double #000; border-radius: 15px; text-align: center;">
+        <!-- Decorative Elements -->
+        <div style="position: absolute; top: 20px; left: 20px; font-size: 40px; opacity: 0.1; transform: rotate(-15deg);">★</div>
+        <div style="position: absolute; top: 20px; right: 20px; font-size: 40px; opacity: 0.1; transform: rotate(15deg);">★</div>
+        <div style="position: absolute; bottom: 20px; left: 20px; font-size: 40px; opacity: 0.1; transform: rotate(15deg);">★</div>
+        <div style="position: absolute; bottom: 20px; right: 20px; font-size: 40px; opacity: 0.1; transform: rotate(-15deg);">★</div>
+        
+        <!-- Large Watermark in Center -->
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.05; z-index: 1; pointer-events: none;">
+          <img src="${currentLogo}" alt="School Watermark" style="width: 400px; height: 400px; object-fit: contain;" />
+        </div>
+        
+        <!-- Content Container -->
+        <div style="position: relative; z-index: 2;">
+          <!-- Header with School Logo -->
+          <div style="margin-bottom: 30px;">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 25px; margin-bottom: 25px;">
+              <img src="${currentLogo}" alt="School Logo" style="width: 100px; height: 100px; border-radius: 12px; border: 3px solid #000;" />
+              <div>
+                <h1 style="font-size: 32px; font-weight: bold; margin: 0; color: #000;">OFFINSO COLLEGE OF EDUCATION J.H.S</h1>
+                <p style="font-size: 18px; margin: 8px 0; color: #000;">Offinso, Ashanti Region, Ghana</p>
+                <p style="font-size: 16px; margin: 0; color: #666; font-style: italic;">"Knowledge is Power"</p>
+              </div>
+            </div>
+            <div style="border-top: 3px double #000; margin: 20px 0;"></div>
+            <h2 style="font-size: 28px; font-weight: bold; margin: 25px 0; color: #000; text-decoration: underline;">ACADEMIC CERTIFICATE</h2>
+          </div>
+
+          <!-- Certificate Content -->
+          <div style="margin: 40px 0; padding: 0 20px;">
+            <p style="font-size: 20px; margin-bottom: 25px; line-height: 1.8;">
+              This is to certify that
+            </p>
+            
+            <p style="font-size: 28px; margin-bottom: 25px; font-weight: bold; color: #000; font-style: italic;">
+              ${mockReportCard.studentName}
+            </p>
+            
+            <p style="font-size: 20px; margin-bottom: 25px; line-height: 1.8;">
+              has successfully completed the academic requirements for
+            </p>
+            
+            <p style="font-size: 24px; margin-bottom: 25px; font-weight: bold; color: #000;">
+              ${mockReportCard.class}
+            </p>
+            
+            <p style="font-size: 20px; margin-bottom: 25px; line-height: 1.8;">
+              during the <strong>${mockReportCard.term}, ${mockReportCard.year}</strong> academic term.
+            </p>
+            
+            <p style="font-size: 20px; margin-bottom: 35px; line-height: 1.8;">
+              The student has demonstrated commendable academic performance with an overall average of 
+              <strong>${mockReportCard.overallAverage}%</strong> and has been ranked 
+              <strong>${getOrdinalSuffix(mockReportCard.position)}</strong> out of ${mockReportCard.totalStudents} students in the class.
+            </p>
+            
+            <div style="background: #f9f9f9; border: 2px solid #000; border-radius: 8px; padding: 20px; margin: 30px 0;">
+              <p style="font-size: 22px; margin: 0; font-weight: bold; color: #000;">
+                ACHIEVEMENT LEVEL: 
+                <span style="color: ${mockReportCard.overallAverage >= 80 ? '#28a745' : mockReportCard.overallAverage >= 70 ? '#17a2b8' : mockReportCard.overallAverage >= 60 ? '#ffc107' : '#dc3545'};">
+                  ${mockReportCard.overallAverage >= 80 ? 'EXCELLENT' : mockReportCard.overallAverage >= 70 ? 'VERY GOOD' : mockReportCard.overallAverage >= 60 ? 'GOOD' : 'NEEDS IMPROVEMENT'}
+                </span>
+              </p>
+            </div>
+          </div>
+
+          <!-- Authentication Section -->
+          <div style="margin-top: 50px; text-align: center;">
+            <div style="background: #f0f0f0; border: 2px dashed #000; border-radius: 8px; padding: 20px; display: inline-block; min-width: 300px;">
+              <p style="font-size: 16px; margin: 0 0 10px 0; color: #000;">
+                <strong>AUTHENTICATION CODE</strong>
+              </p>
+              <p style="font-size: 20px; font-weight: bold; margin: 0; letter-spacing: 3px; color: #000;">
+                CERT-${mockReportCard.studentId.substring(0, 6)}-${mockReportCard.year}
+              </p>
+              <p style="font-size: 12px; margin: 10px 0 0 0; color: #666;">
+                Verify at: www.oce.edu.gh/verify/${mockReportCard.studentId.substring(0, 6)}-${mockReportCard.year}
+              </p>
+            </div>
+          </div>
+          
+          <!-- Issued By Section -->
+          <div style="margin-top: 40px; text-align: center;">
+            <p style="font-size: 14px; margin: 0; color: #000;">
+              <strong>Issued by:</strong> Offinso College of Education J.H.S.
+            </p>
+            <p style="font-size: 14px; margin: 5px 0 0 0; color: #000;">
+              Offinso, Ashanti Region, Ghana
+            </p>
+            <p style="font-size: 14px; margin: 5px 0 0 0; color: #000;">
+              Date Issued: ${currentDate}
+            </p>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Certificate - ${mockReportCard.studentName}</title>
+            <style>
+              body { margin: 0; padding: 20px; background: #f5f5f5; }
+              @media print {
+                body { margin: 0; background: white; }
+                .no-print { display: none !important; }
+              }
+            </style>
+          </head>
+          <body>
+            ${certificateContent}
+            <div class="no-print" style="text-align: center; margin-top: 20px;">
+              <button onclick="window.print()" style="margin-right: 10px; padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">Print Certificate</button>
+              <button onclick="window.close()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">Close</button>
+            </div>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+    }
+  };
+
+    const handleDownloadTranscript = async () => {
+    if (!selectedStudentData) return;
+
+    // Generate transcript HTML with all academic records
+    const currentDate = new Date().toLocaleDateString('en-GB', { 
+      day: '2-digit', 
+      month: '2-digit', 
+      year: 'numeric' 
+    });
+
+    // Get all scores for this student
+    const allScores = await database.getAllScores();
+    const studentScores = allScores.filter(score => score.studentId === selectedStudentData.id);
+    
+    // Get all subjects
+    const allSubjects = await database.getAllSubjects();
+    
+    // Group scores by year and term
+    const academicRecords: Record<string, Record<string, any[]>> = {};
+    
+    // Define the years to show (current year and previous two years)
+    const currentYear = parseInt(selectedYear);
+    const years = [currentYear - 2, currentYear - 1, currentYear];
+    const terms = ["Term 1", "Term 2", "Term 3"];
+    
+    // Initialize academic records structure
+    years.forEach(year => {
+      academicRecords[year.toString()] = {};
+      terms.forEach(term => {
+        academicRecords[year.toString()][term] = [];
+      });
+    });
+    
+    // Populate academic records
+    studentScores.forEach(score => {
+      if (academicRecords[score.year] && academicRecords[score.year][score.term]) {
+        const subject = allSubjects.find(s => s.id === score.subjectId);
+        if (subject) {
+          academicRecords[score.year][score.term].push({
+            subject: subject.name,
+            classScore: score.classScore,
+            examScore: score.examScore,
+            totalScore: score.totalScore,
+            grade: score.grade,
+            remarks: score.remarks
+          });
+        }
+      }
+    });
+    
+    // Generate academic progress overview
+    let progressOverviewHTML = '';
+    
+    // Calculate yearly averages
+    const yearlyAverages: Record<string, number> = {};
+    const termAverages: Record<string, Record<string, number>> = {};
+    
+    years.forEach(year => {
+      const yearStr = year.toString();
+      let yearTotal = 0;
+      let yearCount = 0;
+      
+      terms.forEach(term => {
+        if (academicRecords[yearStr][term].length > 0) {
+          const termTotal = academicRecords[yearStr][term].reduce((sum, record) => sum + record.totalScore, 0);
+          const termAverage = Math.round(termTotal / academicRecords[yearStr][term].length);
+          if (!termAverages[yearStr]) termAverages[yearStr] = {};
+          termAverages[yearStr][term] = termAverage;
+          yearTotal += termAverage;
+          yearCount++;
+        }
+      });
+      
+      if (yearCount > 0) {
+        yearlyAverages[yearStr] = Math.round(yearTotal / yearCount);
+      }
+    });
+    
+    // Progress overview
+    progressOverviewHTML = `
+      <div style="margin-bottom: 30px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; color: white;">
+        <h3 style="font-size: 18px; font-weight: bold; margin: 0 0 15px 0; text-align: center;">ACADEMIC PROGRESS OVERVIEW</h3>
+        
+        <div style="display: flex; justify-content: space-around; flex-wrap: wrap; gap: 15px;">
+          ${years.map(year => `
+            <div style="background: rgba(255, 255, 255, 0.2); padding: 15px; border-radius: 8px; text-align: center; min-width: 120px;">
+              <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px;">${yearlyAverages[year.toString()] || 0}%</div>
+              <div style="font-size: 14px;">${year} Avg</div>
+            </div>
+          `).join('')}
+        </div>
+        
+        <div style="margin-top: 20px; text-align: center; font-size: 14px;">
+          <p style="margin: 0;">
+            <strong>Overall Progress:</strong> 
+            ${yearlyAverages[(currentYear - 2).toString()] && yearlyAverages[(currentYear).toString()] ? 
+              (yearlyAverages[(currentYear).toString()]! > yearlyAverages[(currentYear - 2).toString()!] ? '↑ Improving' : 
+               yearlyAverages[(currentYear).toString()]! < yearlyAverages[(currentYear - 2).toString()!] ? '↓ Declining' : '→ Stable') : 
+              'Insufficient data'}
+          </p>
+        </div>
+      </div>
+    `;
+    
+    // Detailed academic records by year
+    let detailedRecordsHTML = '';
+    
+    years.forEach(year => {
+      const yearStr = year.toString();
+      let yearHasRecords = false;
+      
+      // Check if this year has any records
+      terms.forEach(term => {
+        if (academicRecords[yearStr][term].length > 0) {
+          yearHasRecords = true;
+        }
+      });
+      
+      if (yearHasRecords) {
+        detailedRecordsHTML += `
+          <div style="margin-bottom: 30px; page-break-inside: avoid;">
+            <h3 style="font-size: 18px; font-weight: bold; margin: 0 0 15px 0; color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 8px;">
+              Academic Year: ${yearStr}
+            </h3>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+              ${terms.map(term => {
+                if (academicRecords[yearStr][term].length > 0) {
+                  const termAverage = termAverages[yearStr]?.[term] || 0;
+                  return `
+                    <div style="background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 8px; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #dee2e6;">
+                        <h4 style="font-size: 16px; font-weight: bold; margin: 0; color: #34495e;">${term}</h4>
+                        <div style="background: ${termAverage >= 80 ? '#28a745' : termAverage >= 70 ? '#17a2b8' : termAverage >= 60 ? '#ffc107' : '#dc3545'}; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">
+                          ${termAverage}%
+                        </div>
+                      </div>
+                      
+                      <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                        <thead>
+                          <tr style="background: #e9ecef;">
+                            <th style="border: 1px solid #dee2e6; padding: 8px; text-align: left; font-weight: bold;">Subject</th>
+                            <th style="border: 1px solid #dee2e6; padding: 8px; text-align: center; font-weight: bold;">Total</th>
+                            <th style="border: 1px solid #dee2e6; padding: 8px; text-align: center; font-weight: bold;">Grade</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          ${academicRecords[yearStr][term].map(record => `
+                            <tr>
+                              <td style="border: 1px solid #dee2e6; padding: 6px;">${record.subject}</td>
+                              <td style="border: 1px solid #dee2e6; padding: 6px; text-align: center; font-weight: bold;">${record.totalScore}</td>
+                              <td style="border: 1px solid #dee2e6; padding: 6px; text-align: center; font-weight: bold; color: ${record.grade === 'A' ? '#28a745' : record.grade === 'B' ? '#17a2b8' : record.grade === 'C' ? '#ffc107' : '#dc3545'};">${record.grade}</td>
+                            </tr>
+                          `).join('')}
+                        </tbody>
+                      </table>
+                    </div>
+                  `;
+                }
+                return '';
+              }).join('')}
+            </div>
+          </div>
+        `;
+      }
+    });
+    
+    // Generate subject mastery visualization
+    let subjectMasteryHTML = '';
+    
+    // Collect all unique subjects
+    const allSubjectRecords: Record<string, {scores: number[], average: number}> = {};
+    
+    studentScores.forEach(score => {
+      const subject = allSubjects.find(s => s.id === score.subjectId);
+      if (subject) {
+        if (!allSubjectRecords[subject.name]) {
+          allSubjectRecords[subject.name] = {scores: [], average: 0};
+        }
+        allSubjectRecords[subject.name].scores.push(score.totalScore);
+      }
+    });
+    
+    // Calculate averages
+    Object.keys(allSubjectRecords).forEach(subjectName => {
+      const scores = allSubjectRecords[subjectName].scores;
+      const average = scores.length > 0 ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length) : 0;
+      allSubjectRecords[subjectName].average = average;
+    });
+    
+    // Sort by average score
+    const sortedSubjects = Object.keys(allSubjectRecords).sort((a, b) => 
+      allSubjectRecords[b].average - allSubjectRecords[a].average
+    );
+    
+    if (sortedSubjects.length > 0) {
+      subjectMasteryHTML = `
+        <div style="margin-bottom: 30px;">
+          <h3 style="font-size: 18px; font-weight: bold; margin: 0 0 15px 0; color: #2c3e50; border-bottom: 3px solid #27ae60; padding-bottom: 8px;">
+            SUBJECT MASTERY LEVELS
+          </h3>
+          
+          <div style="background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 8px; padding: 20px;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px;">
+              ${sortedSubjects.slice(0, 8).map(subjectName => {
+                const avgScore = allSubjectRecords[subjectName].average;
+                const barWidth = Math.max(10, (avgScore / 100) * 100);
+                return `
+                  <div style="text-align: center;">
+                    <div style="font-size: 12px; font-weight: bold; margin-bottom: 5px; color: #2c3e50;">${subjectName}</div>
+                    <div style="background: #ecf0f1; height: 8px; border-radius: 4px; overflow: hidden; margin-bottom: 5px;">
+                      <div style="background: ${avgScore >= 80 ? '#28a745' : avgScore >= 70 ? '#17a2b8' : avgScore >= 60 ? '#ffc107' : '#dc3545'}; height: 100%; width: ${barWidth}%;"></div>
+                    </div>
+                    <div style="font-size: 11px; font-weight: bold; color: ${avgScore >= 80 ? '#28a745' : avgScore >= 70 ? '#17a2b8' : avgScore >= 60 ? '#ffc107' : '#dc3545'};">${avgScore}%</div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    
+    // Generate cumulative performance trend
+    let performanceTrendHTML = '';
+    
+    if (Object.keys(yearlyAverages).length > 1) {
+      performanceTrendHTML = `
+        <div style="margin-bottom: 30px;">
+          <h3 style="font-size: 18px; font-weight: bold; margin: 0 0 15px 0; color: #2c3e50; border-bottom: 3px solid #e74c3c; padding-bottom: 8px;">
+            PERFORMANCE TREND
+          </h3>
+          
+          <div style="background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 8px; padding: 20px;">
+            <div style="display: flex; align-items: flex-end; height: 120px; gap: 30px; justify-content: center;">
+              ${years.map(year => {
+                const yearStr = year.toString();
+                const avg = yearlyAverages[yearStr] || 0;
+                const height = Math.max(20, (avg / 100) * 100);
+                return `
+                  <div style="text-align: center;">
+                    <div style="display: flex; flex-direction: column-reverse; height: 80px; align-items: center; justify-content: flex-end;">
+                      <div style="background: ${avg >= 80 ? '#28a745' : avg >= 70 ? '#17a2b8' : avg >= 60 ? '#ffc107' : '#dc3545'}; width: 40px; height: ${height}px; border-radius: 4px 4px 0 0;"></div>
+                    </div>
+                    <div style="font-size: 12px; font-weight: bold; margin-top: 8px; color: #2c3e50;">${yearStr}</div>
+                    <div style="font-size: 11px; color: #7f8c8d;">${avg}%</div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    const transcriptContent = `
+      <div style="max-width: 900px; margin: 0 auto; padding: 30px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: white; position: relative; border: 4px solid #2c3e50; border-radius: 15px;">
+        <!-- Decorative Elements -->
+        <div style="position: absolute; top: 20px; left: 20px; font-size: 30px; opacity: 0.1; transform: rotate(-15deg);">★</div>
+        <div style="position: absolute; top: 20px; right: 20px; font-size: 30px; opacity: 0.1; transform: rotate(15deg);">★</div>
+        <div style="position: absolute; bottom: 20px; left: 20px; font-size: 30px; opacity: 0.1; transform: rotate(15deg);">★</div>
+        <div style="position: absolute; bottom: 20px; right: 20px; font-size: 30px; opacity: 0.1; transform: rotate(-15deg);">★</div>
+        
+        <!-- Large Watermark in Center -->
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.05; z-index: 1; pointer-events: none;">
+          <img src="${currentLogo}" alt="School Watermark" style="width: 500px; height: 500px; object-fit: contain;" />
+        </div>
+        
+        <!-- Content Container -->
+        <div style="position: relative; z-index: 2;">
+          <!-- Header with School Logo -->
+          <div style="margin-bottom: 30px; text-align: center;">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 25px; margin-bottom: 20px;">
+              <img src="${currentLogo}" alt="School Logo" style="width: 90px; height: 90px; border-radius: 12px; border: 3px solid #2c3e50;" />
+              <div>
+                <h1 style="font-size: 26px; font-weight: bold; margin: 0; color: #2c3e50;">OFFINSO COLLEGE OF EDUCATION J.H.S</h1>
+                <p style="font-size: 16px; margin: 5px 0; color: #34495e;">Offinso, Ashanti Region, Ghana</p>
+                <p style="font-size: 14px; margin: 0; color: #7f8c8d; font-style: italic;">"Knowledge is Power"</p>
+              </div>
+            </div>
+            <div style="border-top: 3px double #3498db; margin: 25px 0;"></div>
+            <h2 style="font-size: 24px; font-weight: bold; margin: 25px 0; color: #2c3e50; text-align: center; text-decoration: underline;">COMPREHENSIVE ACADEMIC TRANSCRIPT</h2>
+          </div>
+
+          <!-- Student Information Section -->
+          <div style="margin-bottom: 30px; background: linear-gradient(135deg, #3498db 0%, #2c3e50 100%); padding: 20px; border-radius: 12px; color: white;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <tr>
+                <td style="padding: 8px; width: 15%;"><strong>Student ID:</strong></td>
+                <td style="padding: 8px; width: 35%;">${mockReportCard.studentId}</td>
+                <td style="padding: 8px; width: 15%;"><strong>Gender:</strong></td>
+                <td style="padding: 8px; width: 35%;">${selectedStudentData?.gender || 'Male'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px;"><strong>Name:</strong></td>
+                <td style="padding: 8px;" colspan="3"><strong>${mockReportCard.studentName}</strong></td>
+              </tr>
+              <tr>
+                <td style="padding: 8px;"><strong>Class:</strong></td>
+                <td style="padding: 8px;">${selectedStudentData?.class || mockReportCard.class}</td>
+                <td style="padding: 8px;"><strong>Issue Date:</strong></td>
+                <td style="padding: 8px;">${currentDate}</td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- Progress Overview -->
+          ${progressOverviewHTML}
+
+          <!-- Subject Mastery Levels -->
+          ${subjectMasteryHTML}
+
+          <!-- Performance Trend -->
+          ${performanceTrendHTML}
+
+          <!-- Detailed Academic Records -->
+          ${detailedRecordsHTML}
+
+          <!-- Footer -->
+          <div style="margin-top: 40px; text-align: center; font-size: 12px; color: #7f8c8d; border-top: 1px solid #bdc3c7; padding-top: 20px;">
+            <p style="margin: 0;">
+              <strong>Official Transcript • Verified Document</strong>
+            </p>
+            <p style="margin: 5px 0 0 0;">
+              This transcript contains a complete academic record of the student's performance across all terms and years.
+            </p>
+            <p style="margin: 5px 0 0 0; font-size: 11px;">
+              Printed on: ${currentDate} • Valid for academic purposes
+            </p>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Comprehensive Transcript - ${mockReportCard.studentName}</title>
+            <style>
+              body { margin: 0; padding: 20px; background: #f5f5f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+              @media print {
+                body { margin: 0; background: white; }
+                .no-print { display: none !important; }
+              }
+              @page { margin: 0.5in; }
+            </style>
+          </head>
+          <body>
+            ${transcriptContent}
+            <div class="no-print" style="text-align: center; margin-top: 20px;">
+              <button onclick="window.print()" style="margin-right: 10px; padding: 12px 24px; background: #3498db; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px;">Print Transcript</button>
+              <button onclick="window.close()" style="padding: 12px 24px; background: #95a5a6; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px;">Close</button>
+            </div>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
+
+  const filteredStudents = students.filter(student => {
+    const matchesSearch = student.name.toLowerCase().includes(studentSearchTerm.toLowerCase()) ||
+                         student.id.toLowerCase().includes(studentSearchTerm.toLowerCase());
+    const matchesClass = selectedClass === 'all' || student.class === selectedClass;
+    return matchesSearch && matchesClass;
+  });
+
+  const uniqueClasses = [...new Set(students.map(s => s.class))].sort();
+
+  return (
+    <div className="space-y-6 bg-white text-black">
+      <Card className="glass-card">
+        <CardHeader className="card-compact-header">
+          <CardTitle className="flex items-center gap-2 text-black">
+            <FileText className="w-5 h-5" />
+            Reports Management
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!isStudent && (
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-xs font-semibold mb-1">Search Student</label>
+                <div className="relative">
+                  <Search className="absolute left-2 top-1.5 w-4 h-4 text-gray-400" />
+                  <Input
+                    placeholder="Name or ID..."
+                    value={studentSearchTerm}
+                    onChange={(e) => setStudentSearchTerm(e.target.value)}
+                    className="pl-8 input-compact"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1">Class</label>
+                <Select value={selectedClass} onValueChange={setSelectedClass}>
+                  <SelectTrigger className="input-compact">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Classes</SelectItem>
+                    {uniqueClasses.map(cls => (
+                      <SelectItem key={cls} value={cls}>{cls}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1">Student</label>
+                <Select value={selectedStudent} onValueChange={setSelectedStudent}>
+                  <SelectTrigger className="input-compact">
+                    <SelectValue placeholder="Select student" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {filteredStudents.map(student => (
+                      <SelectItem key={student.id} value={student.id}>
+                        {student.name} ({student.id})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-semibold mb-1">Term</label>
+              <Select value={selectedTerm} onValueChange={setSelectedTerm}>
+                <SelectTrigger className="input-compact">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Term 1">Term 1</SelectItem>
+                  <SelectItem value="Term 2">Term 2</SelectItem>
+                  <SelectItem value="Term 3">Term 3</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1">Academic Year</label>
+              <Select value={selectedYear} onValueChange={setSelectedYear}>
+                <SelectTrigger className="input-compact">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="2024">2024</SelectItem>
+                  <SelectItem value="2023">2023</SelectItem>
+                  <SelectItem value="2022">2022</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1">Report Type</label>
+              <Select value={reportType} onValueChange={setReportType}>
+                <SelectTrigger className="input-compact">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="report-card">Report Card</SelectItem>
+                  <SelectItem value="certificate">Certificate</SelectItem>
+                  <SelectItem value="transcript">Transcript</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {selectedStudentData && (
+            <div className="flex flex-wrap gap-2">
+              <Button 
+                onClick={() => {
+                  if (reportType === 'report-card') {
+                    handleDownload();
+                  } else if (reportType === 'certificate') {
+                    handleDownloadCertificate();
+                  } else if (reportType === 'transcript') {
+                    handleDownloadTranscript();
+                  }
+                }}
+                className="btn-primary btn-compact"
+              >
+                <Download className="w-4 h-4 mr-1" />
+                Download {reportType === 'report-card' ? 'Report Card' : reportType === 'certificate' ? 'Certificate' : 'Transcript'}
+              </Button>
+              <Button 
+                onClick={() => window.print()}
+                className="btn-compact"
+                variant="outline"
+              >
+                <Printer className="w-4 h-4 mr-1" />
+                Print
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {selectedStudentData && (
+        <Card className="glass-card">
+          <CardHeader className="card-compact-header">
+            <CardTitle className="text-black">Report Preview</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {reportType === 'report-card' && (
+              <div dangerouslySetInnerHTML={{ __html: generateReportCard() }} />
+            )}
+            {reportType === 'certificate' && (
+              <div dangerouslySetInnerHTML={{ 
+                __html: `
+                  <div style="max-width: 700px; margin: 0 auto; padding: 30px; font-family: 'Times New Roman', serif; background: white; position: relative; border: 3px solid #000; border-radius: 12px; text-align: center;">
+                    <!-- Large Watermark in Center -->
+                    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.08; z-index: 1; pointer-events: none;">
+                      <img src="${currentLogo}" alt="School Watermark" style="width: 500px; height: 500px; object-fit: contain;" />
+                    </div>
+                    
+                    <!-- Content Container -->
+                    <div style="position: relative; z-index: 2;">
+                      <!-- Header with School Logo -->
+                      <div style="margin-bottom: 30px;">
+                        <div style="display: flex; align-items: center; justify-content: center; gap: 20px; margin-bottom: 20px;">
+                          <img src="${currentLogo}" alt="School Logo" style="width: 100px; height: 100px; border-radius: 8px; border: 2px solid #000;" />
+                          <div>
+                            <h1 style="font-size: 28px; font-weight: bold; margin: 0; color: #000;">OFFINSO COLLEGE OF EDUCATION J.H.S</h1>
+                            <p style="font-size: 16px; margin: 5px 0; color: #000;">Offinso, Ashanti Region, Ghana</p>
+                            <p style="font-size: 14px; margin: 0; color: #666; font-style: italic;">"Knowledge is Power"</p>
+                          </div>
+                        </div>
+                        <h2 style="font-size: 20px; font-weight: bold; margin: 20px 0; color: #000; text-decoration: underline;">ACADEMIC CERTIFICATE</h2>
+                      </div>
+
+                      <!-- Certificate Content -->
+                      <div style="margin: 30px 0;">
+                        <p style="font-size: 16px; margin-bottom: 20px; line-height: 1.6;">
+                          This is to certify that <strong>${mockReportCard.studentName}</strong> has successfully completed the academic requirements for
+                          <strong>${mockReportCard.class}</strong> during the <strong>${mockReportCard.term}, ${mockReportCard.year}</strong> academic term.
+                        </p>
+                        
+                        <p style="font-size: 16px; margin-bottom: 20px; line-height: 1.6;">
+                          The student has demonstrated commendable academic performance with an overall average of 
+                          <strong>${mockReportCard.overallAverage}%</strong> and has been ranked 
+                          <strong>${getOrdinalSuffix(mockReportCard.position)}</strong> out of ${mockReportCard.totalStudents} students in the class.
+                        </p>
+                        
+                        <p style="font-size: 16px; margin-bottom: 30px; line-height: 1.6;">
+                          This certificate is awarded in recognition of the student's dedication, hard work, and academic excellence.
+                        </p>
+                      </div>
+
+                      <!-- Signatures Section -->
+                      <div style="margin-top: 40px;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                          <tr>
+                            <td style="width: 33%; text-align: center; padding: 10px;">
+                              <div style="height: 50px; margin-bottom: 5px;">
+                                ${schoolSettings?.principalSignature ? `<img src="${schoolSettings.principalSignature}" style="max-width: 120px; max-height: 40px;" />` : ''}
+                              </div>
+                              <div style="border-top: 1px solid #000; padding-top: 5px;">
+                                <strong>Class Teacher</strong><br/>
+                                ${classTeacherName}
+                              </div>
+                            </td>
+                            <td style="width: 34%; text-align: center; padding: 10px;">
+                              <div style="height: 50px; margin-bottom: 5px;">
+                                ${schoolSettings?.headmasterSignature ? `<img src="${schoolSettings.headmasterSignature}" style="max-width: 120px; max-height: 40px;" />` : ''}
+                              </div>
+                              <div style="border-top: 1px solid #000; padding-top: 5px;">
+                                <strong>Headmaster</strong><br/>
+                                ${schoolSettings?.principalName || 'Dr. Samuel Adjei'}
+                              </div>
+                            </td>
+                            <td style="width: 33%; text-align: center; padding: 10px;">
+                              <div style="height: 50px; margin-bottom: 5px;"></div>
+                              <div style="border-top: 1px solid #000; padding-top: 5px;">
+                                <strong>Date</strong><br/>
+                                ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                              </div>
+                            </td>
+                          </tr>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                ` 
+              }} />
+            )}
+            {reportType === 'transcript' && (
+              <div dangerouslySetInnerHTML={{ 
+                __html: `
+                  <div style="max-width: 750px; margin: 0 auto; padding: 30px; font-family: Arial, sans-serif; background: white; position: relative; border: 3px solid #000; border-radius: 12px;">
+                    <!-- Large Watermark in Center -->
+                    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.08; z-index: 1; pointer-events: none;">
+                      <img src="${currentLogo}" alt="School Watermark" style="width: 500px; height: 500px; object-fit: contain;" />
+                    </div>
+                    
+                    <!-- Content Container -->
+                    <div style="position: relative; z-index: 2;">
+                      <!-- Header with School Logo -->
+                      <div style="margin-bottom: 25px;">
+                        <div style="display: flex; align-items: center; justify-content: center; gap: 20px; margin-bottom: 15px;">
+                          <img src="${currentLogo}" alt="School Logo" style="width: 70px; height: 70px; border-radius: 8px; border: 2px solid #000;" />
+                          <div>
+                            <h1 style="font-size: 20px; font-weight: bold; margin: 0; color: #000;">OFFINSO COLLEGE OF EDUCATION J.H.S</h1>
+                            <p style="font-size: 13px; margin: 3px 0; color: #000;">Offinso, Ashanti Region, Ghana</p>
+                            <p style="font-size: 12px; margin: 0; color: #666; font-style: italic;">"Knowledge is Power"</p>
+                          </div>
+                        </div>
+                        <h2 style="font-size: 18px; font-weight: bold; margin: 15px 0; color: #000; text-align: center; text-decoration: underline;">STUDENT ACADEMIC TRANSCRIPT</h2>
+                      </div>
+
+                      <!-- Student Information Section -->
+                      <div style="margin-bottom: 25px; background: #f9f9f9; padding: 15px; border: 1px solid #ddd; border-radius: 6px;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                          <tr>
+                            <td style="padding: 6px; width: 20%;"><strong>Student ID:</strong></td>
+                            <td style="padding: 6px; width: 30%;">${mockReportCard.studentId}</td>
+                            <td style="padding: 6px; width: 20%;"><strong>Gender:</strong></td>
+                            <td style="padding: 6px; width: 30%;">${selectedStudentData?.gender || 'Male'}</td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 6px;"><strong>Student Name:</strong></td>
+                            <td style="padding: 6px;" colspan="3">${mockReportCard.studentName}</td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 6px;"><strong>Class:</strong></td>
+                            <td style="padding: 6px;">${mockReportCard.class}</td>
+                            <td style="padding: 6px;"><strong>Term:</strong></td>
+                            <td style="padding: 6px;">${mockReportCard.term}</td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 6px;"><strong>Academic Year:</strong></td>
+                            <td style="padding: 6px;">${mockReportCard.year}</td>
+                            <td style="padding: 6px;"><strong>Attendance:</strong></td>
+                            <td style="padding: 6px;">${mockReportCard.attendance.present}/${mockReportCard.attendance.total} days</td>
+                          </tr>
+                        </table>
+                      </div>
+
+                      <!-- Academic Performance Table -->
+                      <table style="width: 100%; border-collapse: collapse; margin-bottom: 25px; font-size: 12px;">
+                        <thead>
+                          <tr style="background: #e0e0e0;">
+                            <th style="border: 2px solid #000; padding: 10px; text-align: left; font-weight: bold;">SUBJECT</th>
+                            <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">Class Score (50)</th>
+                            <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">Exam Score (50)</th>
+                            <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">Total (100)</th>
+                            <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">GRADE</th>
+                            <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">REMARKS</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          ${mockReportCard.subjects.map(subject => `
+                            <tr>
+                              <td style="border: 1px solid #000; padding: 8px;">${subject.subject}</td>
+                              <td style="border: 1px solid #000; padding: 8px; text-align: center;">${subject.classScore}</td>
+                              <td style="border: 1px solid #000; padding: 8px; text-align: center;">${subject.examScore}</td>
+                              <td style="border: 1px solid #000; padding: 8px; text-align: center; font-weight: bold;">${subject.totalScore}</td>
+                              <td style="border: 1px solid #000; padding: 8px; text-align: center; font-weight: bold;">${subject.grade}</td>
+                              <td style="border: 1px solid #000; padding: 8px; text-align: center;">${subject.remarks}</td>
+                            </tr>
+                          `).join('')}
+                        </tbody>
+                      </table>
+
+                      <!-- Summary Section -->
+                      <div style="margin-bottom: 25px; background: #f9f9f9; padding: 15px; border: 1px solid #ddd; border-radius: 6px;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                          <tr>
+                            <td style="padding: 8px; width: 25%;"><strong>Total Subjects:</strong></td>
+                            <td style="padding: 8px; width: 25%;">${mockReportCard.subjects.length}</td>
+                            <td style="padding: 8px; width: 25%;"><strong>Overall Grade:</strong></td>
+                            <td style="padding: 8px; width: 25%;">${mockReportCard.overallAverage >= 80 ? 'A' : mockReportCard.overallAverage >= 70 ? 'B' : mockReportCard.overallAverage >= 60 ? 'C' : 'D'}</td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 8px;"><strong>Attendance:</strong></td>
+                            <td style="padding: 8px;">${mockReportCard.attendance.present}/${mockReportCard.attendance.total} days</td>
+                            <td style="padding: 8px;"><strong>Total Exam Score:</strong></td>
+                            <td style="padding: 8px;">${mockReportCard.subjects.reduce((sum, subject) => sum + (subject.examScore * 2), 0)}</td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 8px;"><strong>Overall Average:</strong></td>
+                            <td style="padding: 8px;">${mockReportCard.overallAverage}%</td>
+                            <td style="padding: 8px;"><strong>Position:</strong></td>
+                            <td style="padding: 8px;">${getOrdinalSuffix(mockReportCard.position)} out of ${mockReportCard.totalStudents}</td>
+                          </tr>
+                        </table>
+                      </div>
+
+                      <!-- Signatures Section -->
+                      <div style="margin-top: 30px;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                          <tr>
+                            <td style="width: 33%; text-align: center; padding: 15px;">
+                              <div style="height: 50px; margin-bottom: 5px;">
+                                ${schoolSettings?.principalSignature ? `<img src="${schoolSettings.principalSignature}" style="max-width: 120px; max-height: 40px;" />` : ''}
+                              </div>
+                              <div style="border-top: 1px solid #000; padding-top: 5px;">
+                                <strong>Class Teacher</strong><br/>
+                                ${classTeacherName}
+                              </div>
+                            </td>
+                            <td style="width: 34%; text-align: center; padding: 15px;">
+                              <div style="height: 50px; margin-bottom: 5px;">
+                                ${schoolSettings?.headmasterSignature ? `<img src="${schoolSettings.headmasterSignature}" style="max-width: 120px; max-height: 40px;" />` : ''}
+                              </div>
+                              <div style="border-top: 1px solid #000; padding-top: 5px;">
+                                <strong>Headmaster</strong><br/>
+                                ${schoolSettings?.principalName || 'Dr. Samuel Adjei'}
+                              </div>
+                            </td>
+                            <td style="width: 33%; text-align: center; padding: 15px;">
+                              <div style="height: 50px; margin-bottom: 5px;"></div>
+                              <div style="border-top: 1px solid #000; padding-top: 5px;">
+                                <strong>Date</strong><br/>
+                                ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                              </div>
+                            </td>
+                          </tr>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                ` 
+              }} />
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+    
+    {/* Bulk Operations Panel */}
+    {!isStudent && (
+      <Card className="glass-card">
+        <CardHeader className="card-compact-header">
+          <CardTitle className="flex items-center gap-2 text-black">
+            <FileArchive className="w-5 h-5" />
+            Bulk Report Generation
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Bulk Operation Controls */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold mb-1">Report Type for Bulk Generation</label>
+              <Select value={bulkSelectedReportType} onValueChange={setBulkSelectedReportType}>
+                <SelectTrigger className="input-compact">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="report-card">Report Cards</SelectItem>
+                  <SelectItem value="certificate">Certificates</SelectItem>
+                  <SelectItem value="transcript">Transcripts</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="flex items-end gap-2">
+              <Button 
+                onClick={selectAllStudents}
+                variant="outline"
+                className="btn-compact flex-1"
+                disabled={bulkOperationInProgress}
+              >
+                Select All
+              </Button>
+              <Button 
+                onClick={deselectAllStudents}
+                variant="outline"
+                className="btn-compact flex-1"
+                disabled={bulkOperationInProgress}
+              >
+                Deselect All
+              </Button>
+            </div>
+          </div>
+          
+          {/* Student Selection */}
+          <div className="border rounded-lg p-3 bg-gray-50">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="text-sm font-semibold">Select Students ({bulkSelectedStudents.length} selected)</h3>
+              <Badge variant="secondary">{bulkSelectedStudents.length} selected</Badge>
+            </div>
+            
+            <div className="max-h-60 overflow-y-auto">
+              {filteredStudents.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {filteredStudents.map(student => (
+                    <div 
+                      key={student.id}
+                      className={`p-2 rounded border cursor-pointer transition-colors ${
+                        bulkSelectedStudents.includes(student.id) 
+                          ? 'bg-blue-100 border-blue-300' 
+                          : 'bg-white border-gray-200 hover:bg-gray-50'
+                      }`}
+                      onClick={() => toggleStudentSelection(student.id)}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className={`w-4 h-4 rounded border flex items-center justify-center ${
+                          bulkSelectedStudents.includes(student.id) 
+                            ? 'bg-blue-500 border-blue-500' 
+                            : 'border-gray-300'
+                        }`}>
+                          {bulkSelectedStudents.includes(student.id) && (
+                            <CheckCircle className="w-3 h-3 text-white" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{student.name}</p>
+                          <p className="text-xs text-gray-500 truncate">{student.class} • {student.id}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500 text-center py-4">
+                  No students found. Try adjusting your filters.
+                </p>
+              )}
+            </div>
+          </div>
+          
+          {/* Bulk Operation Status */}
+          {bulkOperationInProgress && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">Generating reports...</span>
+                <span className="text-sm text-gray-500">{bulkCompleted}/{bulkTotal}</span>
+              </div>
+              <Progress value={bulkProgress} className="w-full" />
+            </div>
+          )}
+          
+          {bulkError && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{bulkError}</AlertDescription>
+            </Alert>
+          )}
+          
+          {bulkSuccess && (
+            <Alert className="border-green-200 bg-green-50">
+              <CheckCircle className="h-4 w-4 text-green-600" />
+              <AlertDescription className="text-green-800">
+                Bulk reports generated and downloaded successfully!
+              </AlertDescription>
+            </Alert>
+          )}
+          
+          {/* Generate Button */}
+          <div className="flex justify-between items-center">
+            <div className="text-sm text-gray-500">
+              Selected {bulkSelectedStudents.length} students
+            </div>
+            <Button
+              onClick={generateBulkReports}
+              disabled={bulkOperationInProgress || bulkSelectedStudents.length === 0}
+              className="btn-primary btn-compact"
+            >
+              {bulkOperationInProgress ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <DownloadCloud className="w-4 h-4 mr-2" />
+                  Generate & Download Bulk Reports
+                </>
+              )}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    )}
+  </div>
+
+  // Bulk Report Generation Functions
+  const toggleStudentSelection = (studentId: string) => {
+    setBulkSelectedStudents(prev => 
+      prev.includes(studentId) 
+        ? prev.filter(id => id !== studentId) 
+        : [...prev, studentId]
+    );
+  };
+
+  const selectAllStudents = () => {
+    const allStudentIds = students.map(s => s.id);
+    setBulkSelectedStudents(allStudentIds);
+  };
+
+  const deselectAllStudents = () => {
+    setBulkSelectedStudents([]);
+  };
+
+  const generateBulkReports = async () => {
+    if (bulkSelectedStudents.length === 0) {
+      setBulkError("Please select at least one student");
+      return;
+    }
+
+    setBulkOperationInProgress(true);
+    setBulkProgress(0);
+    setBulkTotal(bulkSelectedStudents.length);
+    setBulkCompleted(0);
+    setBulkError("");
+    setBulkSuccess(false);
+
+    try {
+      const zip = new JSZip();
+      const reportsFolder = zip.folder("reports");
+      
+      if (!reportsFolder) {
+        throw new Error("Failed to create reports folder in ZIP archive");
+      }
+
+      for (let i = 0; i < bulkSelectedStudents.length; i++) {
+        const studentId = bulkSelectedStudents[i];
+        const student = students.find(s => s.id === studentId);
+        
+        if (!student) continue;
+
+        try {
+          // Generate report based on selected type
+          let reportContent = "";
+          let fileName = "";
+          
+          if (bulkSelectedReportType === "report-card") {
+            // Generate mock report card for this student
+            const mockReportCard = {
+              studentId: student.id,
+              studentName: student.name,
+              class: student.class,
+              term: selectedTerm,
+              year: selectedYear,
+              position: Math.floor(Math.random() * 50) + 1,
+              totalStudents: 100,
+              attendance: { present: 85, total: 90 },
+              subjects: [
+                { subject: "Mathematics", classScore: 45, examScore: 50, totalScore: 95, grade: "A", remarks: "Excellent" },
+                { subject: "English Language", classScore: 40, examScore: 45, totalScore: 85, grade: "A", remarks: "Very Good" },
+                { subject: "Science", classScore: 38, examScore: 42, totalScore: 80, grade: "A", remarks: "Excellent" },
+                { subject: "Social Studies", classScore: 35, examScore: 40, totalScore: 75, grade: "B", remarks: "Very Good" },
+                { subject: "RME", classScore: 42, examScore: 38, totalScore: 80, grade: "A", remarks: "Excellent" },
+                { subject: "French", classScore: 37, examScore: 35, totalScore: 72, grade: "B", remarks: "Very Good" },
+                { subject: "Creative Arts", classScore: 41, examScore: 39, totalScore: 80, grade: "A", remarks: "Excellent" },
+                { subject: "ICT", classScore: 43, examScore: 44, totalScore: 87, grade: "A", remarks: "Excellent" }
+              ],
+              overallAverage: Math.floor(Math.random() * 40) + 60,
+              teacherRemarks: "The student has shown consistent improvement this term.",
+              nextTermBegins: "08/01/2025"
+            };
+
+            reportContent = generateReportCardForStudent(mockReportCard);
+            fileName = `report-card-${student.name.replace(/\s+/g, '_')}-${selectedTerm}-${selectedYear}.html`;
+          } else if (bulkSelectedReportType === "certificate") {
+            // Generate certificate
+            const mockReportCard = {
+              studentId: student.id,
+              studentName: student.name,
+              class: student.class,
+              term: selectedTerm,
+              year: selectedYear,
+              position: Math.floor(Math.random() * 50) + 1,
+              totalStudents: 100,
+              overallAverage: Math.floor(Math.random() * 40) + 60
+            };
+
+            reportContent = generateCertificateForStudent(mockReportCard);
+            fileName = `certificate-${student.name.replace(/\s+/g, '_')}-${selectedTerm}-${selectedYear}.html`;
+          } else if (bulkSelectedReportType === "transcript") {
+            // Generate transcript
+            reportContent = generateTranscriptForStudent(student);
+            fileName = `transcript-${student.name.replace(/\s+/g, '_')}-${selectedYear}.html`;
+          }
+
+          reportsFolder.file(fileName, reportContent);
+          
+          // Update progress
+          setBulkCompleted(i + 1);
+          setBulkProgress(Math.round(((i + 1) / bulkSelectedStudents.length) * 100));
+        } catch (error) {
+          console.error(`Failed to generate report for student ${studentId}:`, error);
+          // Continue with other students
+        }
+      }
+
+      // Generate ZIP file
+      const content = await zip.generateAsync({ type: "blob" });
+      saveAs(content, `bulk-reports-${selectedClass}-${selectedTerm}-${selectedYear}.zip`);
+      
+      setBulkSuccess(true);
+      setBulkError("");
+    } catch (error) {
+      console.error("Bulk report generation failed:", error);
+      setBulkError("Failed to generate bulk reports. Please try again.");
+    } finally {
+      setBulkOperationInProgress(false);
+    }
+  };
+
+  const generateReportCardForStudent = (mockReportCard: any): string => {
+    return `
+      <div style="max-width: 700px; margin: 0 auto; padding: 30px; font-family: Arial, sans-serif; background: white; position: relative; border: 3px solid #000; border-radius: 12px;">
+        <!-- Large Watermark in Center -->
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.08; z-index: 1; pointer-events: none;">
+          <img src="${currentLogo}" alt="School Watermark" style="width: 500px; height: 500px; object-fit: contain;" />
+        </div>
+        
+        <!-- Content Container -->
+        <div style="position: relative; z-index: 2;">
+          <!-- Header with School Logo -->
+          <div style="margin-bottom: 25px;">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 20px; margin-bottom: 15px;">
+              <img src="${currentLogo}" alt="School Logo" style="width: 80px; height: 80px; border-radius: 8px; border: 2px solid #000;" />
+              <div>
+                <h1 style="font-size: 24px; font-weight: bold; margin: 0; color: #000;">OFFINSO COLLEGE OF EDUCATION J.H.S</h1>
+                <p style="font-size: 14px; margin: 5px 0; color: #000;">Offinso, Ashanti Region, Ghana</p>
+                <p style="font-size: 13px; margin: 0; color: #666; font-style: italic;">"Knowledge is Power"</p>
+              </div>
+            </div>
+            <h2 style="font-size: 20px; font-weight: bold; margin: 20px 0; color: #000; text-align: center; text-decoration: underline;">REPORT CARD</h2>
+          </div>
+
+          <!-- Student Information Section -->
+          <div style="margin-bottom: 20px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+              <tr>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Student ID:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000; width: 25%;">${mockReportCard.studentId}</td>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Gender:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000; width: 25%;">${selectedStudentData?.gender || 'Male'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold;">Student Name:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000;" colspan="3">${mockReportCard.studentName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold;">Class:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000;">${mockReportCard.class}</td>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold;">Term:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000;">${mockReportCard.term}</td>
+              </tr>
+              <tr>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold;">Academic Year:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000;">${mockReportCard.year}</td>
+                <td style="padding: 4px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold;">Attendance:</td>
+                <td style="padding: 4px 8px; border: 1px solid #000;">${mockReportCard.attendance.present}/${mockReportCard.attendance.total} days</td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- Academic Performance Table -->
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px;">
+            <thead>
+              <tr style="background: #e0e0e0;">
+                <th style="border: 2px solid #000; padding: 8px; text-align: left; font-weight: bold;">SUBJECT</th>
+                <th style="border: 2px solid #000; padding: 8px; text-align: center; font-weight: bold;">Class 50</th>
+                <th style="border: 2px solid #000; padding: 8px; text-align: center; font-weight: bold;">Exam 50</th>
+                <th style="border: 2px solid #000; padding: 8px; text-align: center; font-weight: bold;">Total 100</th>
+                <th style="border: 2px solid #000; padding: 8px; text-align: center; font-weight: bold;">GRADE</th>
+                <th style="border: 2px solid #000; padding: 8px; text-align: center; font-weight: bold;">REMARKS</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${mockReportCard.subjects.map((subject: any) => `
+                <tr>
+                  <td style="border: 1px solid #000; padding: 6px;">${subject.subject}</td>
+                  <td style="border: 1px solid #000; padding: 6px; text-align: center;">${subject.classScore}</td>
+                  <td style="border: 1px solid #000; padding: 6px; text-align: center;">${subject.examScore}</td>
+                  <td style="border: 1px solid #000; padding: 6px; text-align: center; font-weight: bold;">${subject.totalScore}</td>
+                  <td style="border: 1px solid #000; padding: 6px; text-align: center; font-weight: bold;">${subject.grade}</td>
+                  <td style="border: 1px solid #000; padding: 6px; text-align: center;">${subject.remarks}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+
+          <!-- Summary Section -->
+          <div style="margin-bottom: 20px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+              <tr>
+                <td style="padding: 6px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Total Subjects:</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; width: 25%; font-weight: bold;">${mockReportCard.subjects.length}</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Overall Grade:</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; width: 25%; font-weight: bold;">${mockReportCard.overallAverage >= 80 ? 'A' : mockReportCard.overallAverage >= 70 ? 'B' : mockReportCard.overallAverage >= 60 ? 'C' : 'D'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Interest:</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; width: 25%; font-weight: bold;">${mockReportCard.overallAverage >= 80 ? 'Enthusiastic' : mockReportCard.overallAverage >= 70 ? 'Diligent' : mockReportCard.overallAverage >= 60 ? 'Steady' : 'Developing'}</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Total Exam Score:</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; width: 25%; font-weight: bold;">${mockReportCard.subjects.reduce((sum: number, subject: any) => sum + (subject.examScore * 2), 0)}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Overall Average:</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; width: 25%; font-weight: bold;">${mockReportCard.overallAverage}%</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; background: #f0f0f0; font-weight: bold; width: 25%;">Position:</td>
+                <td style="padding: 6px 8px; border: 1px solid #000; width: 25%; font-weight: bold;">${getOrdinalSuffix(mockReportCard.position)} out of ${mockReportCard.totalStudents}</td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- Teacher's Remarks -->
+          <div style="margin-bottom: 20px;">
+            <h3 style="font-size: 14px; font-weight: bold; margin-bottom: 10px; color: #000;">Class Teacher's Remarks:</h3>
+            <div style="border: 1px solid #000; padding: 10px; background: #f9f9f9; min-height: 60px;">
+              <p style="margin: 0; font-size: 13px; line-height: 1.4;">${mockReportCard.teacherRemarks}</p>
+            </div>
+          </div>
+
+          <!-- Signatures Section -->
+          <div style="margin-bottom: 20px; text-align: center;">
+            <p style="font-size: 11px; color: #666; margin: 0;">
+              <strong>Generated on:</strong> ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+            </p>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  const generateCertificateForStudent = (mockReportCard: any): string => {
+    return `
+      <div style="max-width: 750px; margin: 0 auto; padding: 40px; font-family: 'Times New Roman', serif; background: white; position: relative; border: 4px double #000; border-radius: 15px; text-align: center;">
+        <!-- Decorative Elements -->
+        <div style="position: absolute; top: 20px; left: 20px; font-size: 40px; opacity: 0.1; transform: rotate(-15deg);">★</div>
+        <div style="position: absolute; top: 20px; right: 20px; font-size: 40px; opacity: 0.1; transform: rotate(15deg);">★</div>
+        <div style="position: absolute; bottom: 20px; left: 20px; font-size: 40px; opacity: 0.1; transform: rotate(15deg);">★</div>
+        <div style="position: absolute; bottom: 20px; right: 20px; font-size: 40px; opacity: 0.1; transform: rotate(-15deg);">★</div>
+        
+        <!-- Large Watermark in Center -->
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.05; z-index: 1; pointer-events: none;">
+          <img src="${currentLogo}" alt="School Watermark" style="width: 400px; height: 400px; object-fit: contain;" />
+        </div>
+        
+        <!-- Content Container -->
+        <div style="position: relative; z-index: 2;">
+          <!-- Header with School Logo -->
+          <div style="margin-bottom: 30px;">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 25px; margin-bottom: 25px;">
+              <img src="${currentLogo}" alt="School Logo" style="width: 100px; height: 100px; border-radius: 12px; border: 3px solid #000;" />
+              <div>
+                <h1 style="font-size: 32px; font-weight: bold; margin: 0; color: #000;">OFFINSO COLLEGE OF EDUCATION J.H.S</h1>
+                <p style="font-size: 18px; margin: 8px 0; color: #000;">Offinso, Ashanti Region, Ghana</p>
+                <p style="font-size: 16px; margin: 0; color: #666; font-style: italic;">"Knowledge is Power"</p>
+              </div>
+            </div>
+            <div style="border-top: 3px double #000; margin: 20px 0;"></div>
+            <h2 style="font-size: 28px; font-weight: bold; margin: 25px 0; color: #000; text-decoration: underline;">ACADEMIC CERTIFICATE</h2>
+          </div>
+
+          <!-- Certificate Content -->
+          <div style="margin: 40px 0; padding: 0 20px;">
+            <p style="font-size: 20px; margin-bottom: 25px; line-height: 1.8;">
+              This is to certify that
+            </p>
+            
+            <p style="font-size: 28px; margin-bottom: 25px; font-weight: bold; color: #000; font-style: italic;">
+              ${mockReportCard.studentName}
+            </p>
+            
+            <p style="font-size: 20px; margin-bottom: 25px; line-height: 1.8;">
+              has successfully completed the academic requirements for
+            </p>
+            
+            <p style="font-size: 24px; margin-bottom: 25px; font-weight: bold; color: #000;">
+              ${mockReportCard.class}
+            </p>
+            
+            <p style="font-size: 20px; margin-bottom: 25px; line-height: 1.8;">
+              during the <strong>${mockReportCard.term}, ${mockReportCard.year}</strong> academic term.
+            </p>
+            
+            <p style="font-size: 20px; margin-bottom: 35px; line-height: 1.8;">
+              The student has demonstrated commendable academic performance with an overall average of 
+              <strong>${mockReportCard.overallAverage}%</strong> and has been ranked 
+              <strong>${getOrdinalSuffix(mockReportCard.position)}</strong> out of ${mockReportCard.totalStudents} students in the class.
+            </p>
+            
+            <div style="background: #f9f9f9; border: 2px solid #000; border-radius: 8px; padding: 20px; margin: 30px 0;">
+              <p style="font-size: 22px; margin: 0; font-weight: bold; color: #000;">
+                ACHIEVEMENT LEVEL: 
+                <span style="color: ${mockReportCard.overallAverage >= 80 ? '#28a745' : mockReportCard.overallAverage >= 70 ? '#17a2b8' : mockReportCard.overallAverage >= 60 ? '#ffc107' : '#dc3545'};">
+                  ${mockReportCard.overallAverage >= 80 ? 'EXCELLENT' : mockReportCard.overallAverage >= 70 ? 'VERY GOOD' : mockReportCard.overallAverage >= 60 ? 'GOOD' : 'NEEDS IMPROVEMENT'}
+                </span>
+              </p>
+            </div>
+          </div>
+
+          <!-- Footer -->
+          <div style="margin-top: 40px; font-size: 14px; color: #666;">
+            <p style="margin: 0;">This certificate is awarded in recognition of academic excellence and dedication to learning.</p>
+            <p style="margin: 5px 0 0 0;">Certificate ID: CERT-${mockReportCard.studentId}-${mockReportCard.year}-${mockReportCard.term.replace(' ', '')}</p>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  const generateTranscriptForStudent = (student: Student): string => {
+    return `
+      <div style="max-width: 800px; margin: 0 auto; padding: 30px; font-family: Arial, sans-serif; background: white; position: relative; border: 3px solid #000; border-radius: 12px;">
+        <!-- Large Watermark in Center -->
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.08; z-index: 1; pointer-events: none;">
+          <img src="${currentLogo}" alt="School Watermark" style="width: 500px; height: 500px; object-fit: contain;" />
+        </div>
+        
+        <!-- Content Container -->
+        <div style="position: relative; z-index: 2;">
+          <!-- Header with School Logo -->
+          <div style="margin-bottom: 25px;">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 20px; margin-bottom: 15px;">
+              <img src="${currentLogo}" alt="School Logo" style="width: 70px; height: 70px; border-radius: 8px; border: 2px solid #000;" />
+              <div>
+                <h1 style="font-size: 20px; font-weight: bold; margin: 0; color: #000;">OFFINSO COLLEGE OF EDUCATION J.H.S</h1>
+                <p style="font-size: 13px; margin: 3px 0; color: #000;">Offinso, Ashanti Region, Ghana</p>
+                <p style="font-size: 12px; margin: 0; color: #666; font-style: italic;">"Knowledge is Power"</p>
+              </div>
+            </div>
+            <h2 style="font-size: 18px; font-weight: bold; margin: 15px 0; color: #000; text-align: center; text-decoration: underline;">STUDENT ACADEMIC TRANSCRIPT</h2>
+          </div>
+
+          <!-- Student Information Section -->
+          <div style="margin-bottom: 25px; background: #f9f9f9; padding: 15px; border: 1px solid #ddd; border-radius: 6px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+              <tr>
+                <td style="padding: 6px; width: 20%;"><strong>Student ID:</strong></td>
+                <td style="padding: 6px; width: 30%;">${student.id}</td>
+                <td style="padding: 6px; width: 20%;"><strong>Gender:</strong></td>
+                <td style="padding: 6px; width: 30%;">${student.gender || 'Male'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px;"><strong>Student Name:</strong></td>
+                <td style="padding: 6px;" colspan="3">${student.name}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px;"><strong>Class:</strong></td>
+                <td style="padding: 6px;">${student.class}</td>
+                <td style="padding: 6px;"><strong>Academic Year:</strong></td>
+                <td style="padding: 6px;">${selectedYear}</td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- Academic Performance Table -->
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 25px; font-size: 12px;">
+            <thead>
+              <tr style="background: #e0e0e0;">
+                <th style="border: 2px solid #000; padding: 10px; text-align: left; font-weight: bold;">SUBJECT</th>
+                <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">Class Score (50)</th>
+                <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">Exam Score (50)</th>
+                <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">Total (100)</th>
+                <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">GRADE</th>
+                <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">REMARKS</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${Array.from({ length: 8 }).map((_, index) => {
+                const subjects = ["Mathematics", "English Language", "Science", "Social Studies", "RME", "French", "Creative Arts", "ICT"];
+                const subject = subjects[index] || `Subject ${index + 1}`;
+                const classScore = Math.floor(Math.random() * 20) + 30;
+                const examScore = Math.floor(Math.random() * 20) + 30;
+                const totalScore = classScore + examScore;
+                const grade = totalScore >= 80 ? 'A' : totalScore >= 70 ? 'B' : totalScore >= 60 ? 'C' : 'D';
+                const remarks = grade === 'A' ? 'Excellent' : grade === 'B' ? 'Very Good' : grade === 'C' ? 'Good' : 'Needs Improvement';
+                
+                return `
+                  <tr>
+                    <td style="border: 1px solid #000; padding: 8px;">${subject}</td>
+                    <td style="border: 1px solid #000; padding: 8px; text-align: center;">${classScore}</td>
+                    <td style="border: 1px solid #000; padding: 8px; text-align: center;">${examScore}</td>
+                    <td style="border: 1px solid #000; padding: 8px; text-align: center; font-weight: bold;">${totalScore}</td>
+                    <td style="border: 1px solid #000; padding: 8px; text-align: center; font-weight: bold;">${grade}</td>
+                    <td style="border: 1px solid #000; padding: 8px; text-align: center;">${remarks}</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+
+          <!-- Footer -->
+          <div style="margin-top: 30px; font-size: 12px; color: #666; text-align: center; border-top: 1px solid #ccc; padding-top: 15px;">
+            <p style="margin: 0;">This transcript represents the academic performance of the student for the selected academic period.</p>
+            <p style="margin: 5px 0 0 0;">Generated on: ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}</p>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+  
+  return (
+    <div className="space-y-6 bg-white text-black">
+      {/* Existing UI content */}
+      <Card className="glass-card">
+        <CardHeader className="card-compact-header">
+          <CardTitle className="flex items-center gap-2 text-black">
+            <FileText className="w-5 h-5" />
+            Reports Management
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="card-compact space-y-4">
+          {/* Existing content */}
+          {selectedStudentData && (
+            <div className="flex flex-wrap gap-2">
+              <Button 
+                onClick={() => {
+                  if (reportType === 'report-card') {
+                    handleDownload();
+                  } else if (reportType === 'certificate') {
+                    handleDownloadCertificate();
+                  } else if (reportType === 'transcript') {
+                    handleDownloadTranscript();
+                  }
+                }}
+                className="btn-primary btn-compact"
+              >
+                <Download className="w-4 h-4 mr-1" />
+                Download {reportType === 'report-card' ? 'Report Card' : reportType === 'certificate' ? 'Certificate' : 'Transcript'}
+              </Button>
+              <Button 
+                onClick={() => window.print()}
+                className="btn-compact"
+                variant="outline"
+              >
+                <Printer className="w-4 h-4 mr-1" />
+                Print
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {selectedStudentData && (
+        <Card className="glass-card">
+          <CardHeader className="card-compact-header">
+            <CardTitle className="text-black">Report Preview</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {reportType === 'report-card' && (
+              <div dangerouslySetInnerHTML={{ __html: generateReportCard() }} />
+            )}
+            {reportType === 'certificate' && (
+              <div dangerouslySetInnerHTML={{ 
+                __html: `
+                  <div style="max-width: 750px; margin: 0 auto; padding: 40px; font-family: 'Times New Roman', serif; background: white; position: relative; border: 4px double #000; border-radius: 15px; text-align: center;">
+                    <!-- Decorative Elements -->
+                    <div style="position: absolute; top: 20px; left: 20px; font-size: 40px; opacity: 0.1; transform: rotate(-15deg);">★</div>
+                    <div style="position: absolute; top: 20px; right: 20px; font-size: 40px; opacity: 0.1; transform: rotate(15deg);">★</div>
+                    <div style="position: absolute; bottom: 20px; left: 20px; font-size: 40px; opacity: 0.1; transform: rotate(15deg);">★</div>
+                    <div style="position: absolute; bottom: 20px; right: 20px; font-size: 40px; opacity: 0.1; transform: rotate(-15deg);">★</div>
+                    
+                    <!-- Large Watermark in Center -->
+                    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.08; z-index: 1; pointer-events: none;">
+                      <img src="${currentLogo}" alt="School Watermark" style="width: 500px; height: 500px; object-fit: contain;" />
+                    </div>
+                    
+                    <!-- Content Container -->
+                    <div style="position: relative; z-index: 2;">
+                      <!-- Header with School Logo -->
+                      <div style="margin-bottom: 30px;">
+                        <div style="display: flex; align-items: center; justify-content: center; gap: 25px; margin-bottom: 25px;">
+                          <img src="${currentLogo}" alt="School Logo" style="width: 100px; height: 100px; border-radius: 12px; border: 3px solid #000;" />
+                          <div>
+                            <h1 style="font-size: 32px; font-weight: bold; margin: 0; color: #000;">OFFINSO COLLEGE OF EDUCATION J.H.S</h1>
+                            <p style="font-size: 18px; margin: 8px 0; color: #000;">Offinso, Ashanti Region, Ghana</p>
+                            <p style="font-size: 16px; margin: 0; color: #666; font-style: italic;">"Knowledge is Power"</p>
+                          </div>
+                        </div>
+                        <div style="border-top: 3px double #000; margin: 20px 0;"></div>
+                        <h2 style="font-size: 28px; font-weight: bold; margin: 25px 0; color: #000; text-decoration: underline;">ACADEMIC CERTIFICATE</h2>
+                      </div>
+
+                      <!-- Certificate Content -->
+                      <div style="margin: 40px 0; padding: 0 20px;">
+                        <p style="font-size: 20px; margin-bottom: 25px; line-height: 1.8;">
+                          This is to certify that
+                        </p>
+                        
+                        <p style="font-size: 28px; margin-bottom: 25px; font-weight: bold; color: #000; font-style: italic;">
+                          ${mockReportCard.studentName}
+                        </p>
+                        
+                        <p style="font-size: 20px; margin-bottom: 25px; line-height: 1.8;">
+                          has successfully completed the academic requirements for
+                        </p>
+                        
+                        <p style="font-size: 24px; margin-bottom: 25px; font-weight: bold; color: #000;">
+                          ${mockReportCard.class}
+                        </p>
+                        
+                        <p style="font-size: 20px; margin-bottom: 25px; line-height: 1.8;">
+                          during the <strong>${mockReportCard.term}, ${mockReportCard.year}</strong> academic term.
+                        </p>
+                        
+                        <p style="font-size: 20px; margin-bottom: 35px; line-height: 1.8;">
+                          The student has demonstrated commendable academic performance with an overall average of 
+                          <strong>${mockReportCard.overallAverage}%</strong> and has been ranked 
+                          <strong>${getOrdinalSuffix(mockReportCard.position)}</strong> out of ${mockReportCard.totalStudents} students in the class.
+                        </p>
+                        
+                        <div style="background: #f9f9f9; border: 2px solid #000; border-radius: 8px; padding: 20px; margin: 30px 0;">
+                          <p style="font-size: 22px; margin: 0; font-weight: bold; color: #000;">
+                            ACHIEVEMENT LEVEL: 
+                            <span style="color: ${mockReportCard.overallAverage >= 80 ? '#28a745' : mockReportCard.overallAverage >= 70 ? '#17a2b8' : mockReportCard.overallAverage >= 60 ? '#ffc107' : '#dc3545'};">
+                              ${mockReportCard.overallAverage >= 80 ? 'EXCELLENT' : mockReportCard.overallAverage >= 70 ? 'VERY GOOD' : mockReportCard.overallAverage >= 60 ? 'GOOD' : 'NEEDS IMPROVEMENT'}
+                            </span>
+                          </p>
+                        </div>
+                      </div>
+
+                      <!-- Signatures Section -->
+                      <div style="margin-top: 50px;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 16px;">
+                          <tr>
+                            <td style="width: 33%; text-align: center; padding: 20px;">
+                              <div style="height: 70px; margin-bottom: 10px;">
+                                ${schoolSettings?.principalSignature ? `<img src="${schoolSettings.principalSignature}" style="max-width: 150px; max-height: 50px;" />` : ''}
+                              </div>
+                              <div style="border-top: 2px solid #000; padding-top: 10px; margin: 0 auto; width: 80%;">
+                                <strong>Class Teacher</strong><br/>
+                                ${classTeacherName}
+                              </div>
+                            </td>
+                            <td style="width: 34%; text-align: center; padding: 20px;">
+                              <div style="height: 70px; margin-bottom: 10px;">
+                                ${schoolSettings?.headmasterSignature ? `<img src="${schoolSettings.headmasterSignature}" style="max-width: 150px; max-height: 50px;" />` : ''}
+                              </div>
+                              <div style="border-top: 2px solid #000; padding-top: 10px; margin: 0 auto; width: 80%;">
+                                <strong>Headmaster</strong><br/>
+                                ${schoolSettings?.principalName || 'Dr. Samuel Adjei'}
+                              </div>
+                            </td>
+                            <td style="width: 33%; text-align: center; padding: 20px;">
+                              <div style="height: 70px; margin-bottom: 10px;"></div>
+                              <div style="border-top: 2px solid #000; padding-top: 10px; margin: 0 auto; width: 80%;">
+                                <strong>Date</strong><br/>
+                                ${currentDate}
+                              </div>
+                            </td>
+                          </tr>
+                        </table>
+                      </div>
+                      
+                      <!-- Footer -->
+                      <div style="margin-top: 40px; font-size: 14px; color: #666; text-align: center; border-top: 1px solid #ccc; padding-top: 10px;">
+                        <p style="margin: 0;"><strong>Next Term Begins:</strong> <strong>${mockReportCard.nextTermBegins}</strong></p>
+                        <p style="margin: 5px 0 0 0;">For inquiries, please contact the school administration.</p>
+                      </div>
+                    </div>
+                  </div>
+                ` 
+              }} />
+            )}
+            {reportType === 'transcript' && (
+              <div dangerouslySetInnerHTML={{ 
+                __html: `
+                  <div style="max-width: 800px; margin: 0 auto; padding: 30px; font-family: Arial, sans-serif; background: white; position: relative; border: 3px solid #000; border-radius: 12px;">
+                    <!-- Large Watermark in Center -->
+                    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.08; z-index: 1; pointer-events: none;">
+                      <img src="${currentLogo}" alt="School Watermark" style="width: 500px; height: 500px; object-fit: contain;" />
+                    </div>
+                    
+                    <!-- Content Container -->
+                    <div style="position: relative; z-index: 2;">
+                      <!-- Header with School Logo -->
+                      <div style="margin-bottom: 25px;">
+                        <div style="display: flex; align-items: center; justify-content: center; gap: 20px; margin-bottom: 15px;">
+                          <img src="${currentLogo}" alt="School Logo" style="width: 80px; height: 80px; border-radius: 8px; border: 2px solid #000;" />
+                          <div>
+                            <h1 style="font-size: 24px; font-weight: bold; margin: 0; color: #000;">OFFINSO COLLEGE OF EDUCATION J.H.S</h1>
+                            <p style="font-size: 14px; margin: 3px 0; color: #000;">Offinso, Ashanti Region, Ghana</p>
+                            <p style="font-size: 13px; margin: 0; color: #666; font-style: italic;">"Knowledge is Power"</p>
+                          </div>
+                        </div>
+                        <h2 style="font-size: 20px; font-weight: bold; margin: 15px 0; color: #000; text-align: center; text-decoration: underline;">STUDENT ACADEMIC TRANSCRIPT</h2>
+                      </div>
+
+                      <!-- Student Information Section -->
+                      <div style="margin-bottom: 25px; background: #f9f9f9; padding: 15px; border: 1px solid #ddd; border-radius: 6px;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                          <tr>
+                            <td style="padding: 6px; width: 20%;"><strong>Student ID:</strong></td>
+                            <td style="padding: 6px; width: 30%;">${mockReportCard.studentId}</td>
+                            <td style="padding: 6px; width: 20%;"><strong>Gender:</strong></td>
+                            <td style="padding: 6px; width: 30%;">${selectedStudentData?.gender || 'Male'}</td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 6px;"><strong>Student Name:</strong></td>
+                            <td style="padding: 6px;" colspan="3">${mockReportCard.studentName}</td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 6px;"><strong>Class:</strong></td>
+                            <td style="padding: 6px;">${mockReportCard.class}</td>
+                            <td style="padding: 6px;"><strong>Term:</strong></td>
+                            <td style="padding: 6px;">${mockReportCard.term}</td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 6px;"><strong>Academic Year:</strong></td>
+                            <td style="padding: 6px;">${mockReportCard.year}</td>
+                            <td style="padding: 6px;"><strong>Attendance:</strong></td>
+                            <td style="padding: 6px;">${mockReportCard.attendance.present}/${mockReportCard.attendance.total} days</td>
+                          </tr>
+                        </table>
+                      </div>
+
+                      <!-- Academic Performance Table -->
+                      <table style="width: 100%; border-collapse: collapse; margin-bottom: 25px; font-size: 12px;">
+                        <thead>
+                          <tr style="background: #e0e0e0;">
+                            <th style="border: 2px solid #000; padding: 10px; text-align: left; font-weight: bold;">SUBJECT</th>
+                            <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">Class (50)</th>
+                            <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">Exam (50)</th>
+                            <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">Total (100)</th>
+                            <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">GRADE</th>
+                            <th style="border: 2px solid #000; padding: 10px; text-align: center; font-weight: bold;">REMARKS</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          ${mockReportCard.subjects.map(subject => `
+                            <tr>
+                              <td style="border: 1px solid #000; padding: 8px;">${subject.subject}</td>
+                              <td style="border: 1px solid #000; padding: 8px; text-align: center;">${subject.classScore}</td>
+                              <td style="border: 1px solid #000; padding: 8px; text-align: center;">${subject.examScore}</td>
+                              <td style="border: 1px solid #000; padding: 8px; text-align: center; font-weight: bold;">${subject.totalScore}</td>
+                              <td style="border: 1px solid #000; padding: 8px; text-align: center; font-weight: bold;">${subject.grade}</td>
+                              <td style="border: 1px solid #000; padding: 8px; text-align: center;">${subject.remarks}</td>
+                            </tr>
+                          `).join('')}
+                        </tbody>
+                      </table>
+
+                      <!-- Summary Section -->
+                      <div style="margin-bottom: 25px; background: #f9f9f9; padding: 15px; border: 1px solid #ddd; border-radius: 6px;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                          <tr>
+                            <td style="padding: 8px; width: 25%;"><strong>Total Subjects:</strong></td>
+                            <td style="padding: 8px; width: 25%;">${mockReportCard.subjects.length}</td>
+                            <td style="padding: 8px; width: 25%;"><strong>Overall Grade:</strong></td>
+                            <td style="padding: 8px; width: 25%;">${mockReportCard.overallAverage >= 80 ? 'A' : mockReportCard.overallAverage >= 70 ? 'B' : mockReportCard.overallAverage >= 60 ? 'C' : 'D'}</td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 8px;"><strong>Attendance:</strong></td>
+                            <td style="padding: 8px;">${mockReportCard.attendance.present}/${mockReportCard.attendance.total} days</td>
+                            <td style="padding: 8px;"><strong>Total Exam Score:</strong></td>
+                            <td style="padding: 8px;">${mockReportCard.subjects.reduce((sum, subject) => sum + (subject.examScore * 2), 0)}</td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 8px;"><strong>Overall Average:</strong></td>
+                            <td style="padding: 8px;">${mockReportCard.overallAverage}%</td>
+                            <td style="padding: 8px;"><strong>Position:</strong></td>
+                            <td style="padding: 8px;">${getOrdinalSuffix(mockReportCard.position)} out of ${mockReportCard.totalStudents}</td>
+                          </tr>
+                        </table>
+                      </div>
+
+                      <!-- Signatures Section -->
+                      <div style="margin-top: 30px;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                          <tr>
+                            <td style="width: 33%; text-align: center; padding: 15px;">
+                              <div style="height: 50px; margin-bottom: 5px;">
+                                ${schoolSettings?.principalSignature ? `<img src="${schoolSettings.principalSignature}" style="max-width: 120px; max-height: 40px;" />` : ''}
+                              </div>
+                              <div style="border-top: 1px solid #000; padding-top: 5px; margin: 0 auto; width: 80%;">
+                                <strong>Class Teacher</strong><br/>
+                                ${classTeacherName}
+                              </div>
+                            </td>
+                            <td style="width: 34%; text-align: center; padding: 15px;">
+                              <div style="height: 50px; margin-bottom: 5px;">
+                                ${schoolSettings?.headmasterSignature ? `<img src="${schoolSettings.headmasterSignature}" style="max-width: 120px; max-height: 40px;" />` : ''}
+                              </div>
+                              <div style="border-top: 1px solid #000; padding-top: 5px; margin: 0 auto; width: 80%;">
+                                <strong>Headmaster</strong><br/>
+                                ${schoolSettings?.principalName || 'Dr. Samuel Adjei'}
+                              </div>
+                            </td>
+                            <td style="width: 33%; text-align: center; padding: 15px;">
+                              <div style="height: 50px; margin-bottom: 5px;"></div>
+                              <div style="border-top: 1px solid #000; padding-top: 5px; margin: 0 auto; width: 80%;">
+                                <strong>Date</strong><br/>
+                                ${currentDate}
+                              </div>
+                            </td>
+                          </tr>
+                        </table>
+                      </div>
+                      
+                      <!-- Footer Note -->
+                      <div style="font-size: 10px; color: #666; text-align: center; border-top: 1px solid #ccc; padding-top: 10px; margin-top: 25px;">
+                        <p style="margin: 0;"><strong>Next Term Begins:</strong> <strong>${mockReportCard.nextTermBegins}</strong></p>
+                        <p style="margin: 5px 0 0 0;">This transcript represents the academic performance of the student for the selected academic period.</p>
+                      </div>
+                    </div>
+                  </div>
+                ` 
+              }} />
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
