@@ -21,10 +21,10 @@ class ApiService {
     this.token = null;
   }
 
-  async apiCall(endpoint, options = {}) {
+  async apiCall(endpoint: string, options: RequestInit = {}) {
     const url = `${BASE_URL}${endpoint}`;
     
-    const defaultOptions = {
+    const defaultOptions: RequestInit = {
       headers: {
         'Content-Type': 'application/json',
       },
@@ -32,10 +32,10 @@ class ApiService {
     
     // Add authorization header if token exists
     if (this.token) {
-      defaultOptions.headers['Authorization'] = `Bearer ${this.token}`;
+      (defaultOptions.headers as Record<string, string>)['Authorization'] = `Bearer ${this.token}`;
     }
     
-    const config = {
+    const config: RequestInit = {
       ...defaultOptions,
       ...options,
     };
@@ -58,39 +58,39 @@ class ApiService {
       }
       
       return data;
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('API call failed:', error);
       // If it's a network error or parsing error, rethrow with more context
-      if (error instanceof TypeError || error.message.includes('Unexpected token')) {
-        throw new Error(`Failed to connect to server. Please check your network connection and try again. (${error.message})`);
+      if (error instanceof TypeError || (typeof error === 'object' && error !== null && 'message' in error && (error as Error).message.includes('Unexpected token'))) {
+        throw new Error(`Failed to connect to server. Please check your network connection and try again. ${(error as Error).message}`);
       }
       throw error;
     }
   }
   
   // Auth API methods
-  async login(username, password, role) {
+  async login(username: string, password: string, role: string) {
     return this.apiCall('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password, role }),
     });
   }
   
-  async studentLogin(studentId, password) {
+  async studentLogin(studentId: string, password: string) {
     return this.apiCall('/auth/student/login', {
       method: 'POST',
       body: JSON.stringify({ studentId, password }),
     });
   }
   
-  async teacherLogin(teacherId, phoneNumber) {
+  async teacherLogin(teacherId: string, phoneNumber: string) {
     return this.apiCall('/auth/teacher/login', {
       method: 'POST',
       body: JSON.stringify({ teacherId, phoneNumber }),
     });
   }
   
-  async teacherSignup(inviteToken, username, password, email, phone) {
+  async teacherSignup(inviteToken: string, username: string, password: string, email: string, phone: string) {
     return this.apiCall('/auth/teacher/signup', {
       method: 'POST',
       body: JSON.stringify({ inviteToken, username, password, email, phone }),
@@ -102,25 +102,25 @@ class ApiService {
     return this.apiCall('/students');
   }
   
-  async getStudentById(id) {
+  async getStudentById(id: string) {
     return this.apiCall(`/students/${id}`);
   }
   
-  async addStudent(studentData) {
+  async addStudent(studentData: any) {
     return this.apiCall('/students', {
       method: 'POST',
       body: JSON.stringify(studentData),
     });
   }
   
-  async updateStudent(id, studentData) {
+  async updateStudent(id: string, studentData: any) {
     return this.apiCall(`/students/${id}`, {
       method: 'PUT',
       body: JSON.stringify(studentData),
     });
   }
   
-  async deleteStudent(id) {
+  async deleteStudent(id: string) {
     return this.apiCall(`/students/${id}`, {
       method: 'DELETE',
     });
@@ -131,25 +131,25 @@ class ApiService {
     return this.apiCall('/teachers');
   }
   
-  async getTeacherById(id) {
+  async getTeacherById(id: string) {
     return this.apiCall(`/teachers/${id}`);
   }
   
-  async addTeacher(teacherData) {
+  async addTeacher(teacherData: any) {
     return this.apiCall('/teachers', {
       method: 'POST',
       body: JSON.stringify(teacherData),
     });
   }
   
-  async updateTeacher(id, teacherData) {
+  async updateTeacher(id: string, teacherData: any) {
     return this.apiCall(`/teachers/${id}`, {
       method: 'PUT',
       body: JSON.stringify(teacherData),
     });
   }
   
-  async deleteTeacher(id) {
+  async deleteTeacher(id: string) {
     return this.apiCall(`/teachers/${id}`, {
       method: 'DELETE',
     });
@@ -160,25 +160,25 @@ class ApiService {
     return this.apiCall('/subjects');
   }
   
-  async getSubjectById(id) {
+  async getSubjectById(id: string) {
     return this.apiCall(`/subjects/${id}`);
   }
   
-  async addSubject(subjectData) {
+  async addSubject(subjectData: any) {
     return this.apiCall('/subjects', {
       method: 'POST',
       body: JSON.stringify(subjectData),
     });
   }
   
-  async updateSubject(id, subjectData) {
+  async updateSubject(id: string, subjectData: any) {
     return this.apiCall(`/subjects/${id}`, {
       method: 'PUT',
       body: JSON.stringify(subjectData),
     });
   }
   
-  async deleteSubject(id) {
+  async deleteSubject(id: string) {
     return this.apiCall(`/subjects/${id}`, {
       method: 'DELETE',
     });
@@ -189,25 +189,25 @@ class ApiService {
     return this.apiCall('/scores');
   }
   
-  async getScoresByStudent(studentId, term, year) {
+  async getScoresByStudent(studentId: string, term: string, year: string) {
     return this.apiCall(`/scores/by-student/${studentId}/${term}/${year}`);
   }
   
-  async addScore(scoreData) {
+  async addScore(scoreData: any) {
     return this.apiCall('/scores', {
       method: 'POST',
       body: JSON.stringify(scoreData),
     });
   }
   
-  async updateScore(id, scoreData) {
+  async updateScore(id: string, scoreData: any) {
     return this.apiCall(`/scores/${id}`, {
       method: 'PUT',
       body: JSON.stringify(scoreData),
     });
   }
   
-  async deleteScore(id) {
+  async deleteScore(id: string) {
     return this.apiCall(`/scores/${id}`, {
       method: 'DELETE',
     });
@@ -218,31 +218,31 @@ class ApiService {
     return this.apiCall('/users');
   }
   
-  async getUserById(id) {
+  async getUserById(id: string) {
     return this.apiCall(`/users/${id}`);
   }
   
-  async addUser(userData) {
+  async addUser(userData: any) {
     return this.apiCall('/users', {
       method: 'POST',
       body: JSON.stringify(userData),
     });
   }
   
-  async updateUser(id, userData) {
+  async updateUser(id: string, userData: any) {
     return this.apiCall(`/users/${id}`, {
       method: 'PUT',
       body: JSON.stringify(userData),
     });
   }
   
-  async deleteUser(id) {
+  async deleteUser(id: string) {
     return this.apiCall(`/users/${id}`, {
       method: 'DELETE',
     });
   }
   
-  async createTeacherInvite(email, teacherId) {
+  async createTeacherInvite(email: string, teacherId: string) {
     return this.apiCall('/users/invite/teacher', {
       method: 'POST',
       body: JSON.stringify({ email, teacherId }),
@@ -250,11 +250,11 @@ class ApiService {
   }
 
   // Settings API
-  async getSetting(key) {
+  async getSetting(key: string) {
     return this.apiCall(`/settings/${key}`);
   }
 
-  async updateSetting(key, value) {
+  async updateSetting(key: string, value: string) {
     return this.apiCall(`/settings/${key}`, {
       method: 'PUT',
       body: JSON.stringify({ value })
@@ -262,7 +262,7 @@ class ApiService {
   }
 
   // Change password
-  async changeUserPassword(id, currentPassword, newPassword) {
+  async changeUserPassword(id: string, currentPassword: string, newPassword: string) {
     return this.apiCall(`/users/${id}/change-password`, {
       method: 'POST',
       body: JSON.stringify({ currentPassword, newPassword })
