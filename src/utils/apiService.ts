@@ -190,7 +190,7 @@ class ApiService {
   }
   
   async getScoresByStudent(studentId, term, year) {
-    return this.apiCall(`/scores/${studentId}/${term}/${year}`);
+    return this.apiCall(`/scores/by-student/${studentId}/${term}/${year}`);
   }
   
   async addScore(scoreData) {
