@@ -1,15 +1,18 @@
-import { useState, useEffect } from "react";
-import { Dashboard } from "./Dashboard";
-import { StudentManagement } from "./StudentManagement";
-import { TeacherManagement } from "./TeacherManagement";
-import { SubjectManagement } from "./SubjectManagement";
-import { ScoreManagement } from "./ScoreManagement";
-import { EnhancedReportsManagement } from "./EnhancedReportsManagement";
-import { PromotionManagement } from "./PromotionManagement";
-import { SettingsManagement } from "./SettingsManagement";
-import { WhatsAppBulkMessaging } from "./WhatsAppBulkMessaging";
+import { Suspense, lazy } from "react";
 import { APP_SECTIONS, canAccessSection } from "../constants/app";
+import { LoadingFallback } from "./LoadingFallback";
 import type { User } from "../utils/database";
+
+// Lazy load components for code splitting
+const Dashboard = lazy(() => import("./Dashboard"));
+const StudentManagement = lazy(() => import("./StudentManagement"));
+const TeacherManagement = lazy(() => import("./TeacherManagement"));
+const SubjectManagement = lazy(() => import("./SubjectManagement"));
+const ScoreManagement = lazy(() => import("./ScoreManagement"));
+const EnhancedReportsManagement = lazy(() => import("./EnhancedReportsManagement"));
+const PromotionManagement = lazy(() => import("./PromotionManagement"));
+const SettingsManagement = lazy(() => import("./SettingsManagement"));
+const WhatsAppBulkMessaging = lazy(() => import("./WhatsAppBulkMessaging"));
 
 interface ContentRouterProps {
   activeSection: string;
@@ -24,40 +27,86 @@ export function ContentRouter({ activeSection, currentUser, onNavigate, studentI
 
   // Check if user can access the current section
   if (!canAccessSection(effectiveSection as any, currentUser.role)) {
-    return <Dashboard onNavigate={onNavigate} username={currentUser.username} />;
+    return (
+      <Suspense fallback={<LoadingFallback />}>
+        <Dashboard onNavigate={onNavigate} username={currentUser.username} />
+      </Suspense>
+    );
   }
 
   switch (effectiveSection) {
     case APP_SECTIONS.DASHBOARD:
-      return currentUser.role === 'student' ? 
-        <EnhancedReportsManagement currentUser={currentUser} studentId={currentUser.studentId || studentId} /> :
-        <Dashboard onNavigate={onNavigate} username={currentUser.username} />;
+      return currentUser.role === 'student' ? (
+        <Suspense fallback={<LoadingFallback />}>
+          <EnhancedReportsManagement currentUser={currentUser} studentId={currentUser.studentId || studentId} />
+        </Suspense>
+      ) : (
+        <Suspense fallback={<LoadingFallback />}>
+          <Dashboard onNavigate={onNavigate} username={currentUser.username} />
+        </Suspense>
+      );
         
     case APP_SECTIONS.STUDENTS:
-      return <StudentManagement currentUser={currentUser} />;
+      return (
+        <Suspense fallback={<LoadingFallback />}>
+          <StudentManagement currentUser={currentUser} />
+        </Suspense>
+      );
       
     case APP_SECTIONS.TEACHERS:
-      return <TeacherManagement />;
+      return (
+        <Suspense fallback={<LoadingFallback />}>
+          <TeacherManagement />
+        </Suspense>
+      );
       
     case APP_SECTIONS.SUBJECTS:
-      return <SubjectManagement />;
+      return (
+        <Suspense fallback={<LoadingFallback />}>
+          <SubjectManagement />
+        </Suspense>
+      );
       
     case APP_SECTIONS.SCORES:
-      return <ScoreManagement currentUser={currentUser} />;
+      return (
+        <Suspense fallback={<LoadingFallback />}>
+          <ScoreManagement currentUser={currentUser} />
+        </Suspense>
+      );
       
     case APP_SECTIONS.REPORTS:
-      return <EnhancedReportsManagement currentUser={currentUser} studentId={currentUser.studentId || studentId} />;
+      return (
+        <Suspense fallback={<LoadingFallback />}>
+          <EnhancedReportsManagement currentUser={currentUser} studentId={currentUser.studentId || studentId} />
+        </Suspense>
+      );
       
     case APP_SECTIONS.PROMOTION:
-      return <PromotionManagement />;
+      return (
+        <Suspense fallback={<LoadingFallback />}>
+          <PromotionManagement />
+        </Suspense>
+      );
       
     case APP_SECTIONS.WHATSAPP:
-      return <WhatsAppBulkMessaging />;
+      return (
+        <Suspense fallback={<LoadingFallback />}>
+          <WhatsAppBulkMessaging />
+        </Suspense>
+      );
       
     case APP_SECTIONS.SETTINGS:
-      return <SettingsManagement onUsernameChange={() => {}} currentUser={currentUser} />;
+      return (
+        <Suspense fallback={<LoadingFallback />}>
+          <SettingsManagement onUsernameChange={() => {}} currentUser={currentUser} />
+        </Suspense>
+      );
       
     default:
-      return <Dashboard onNavigate={onNavigate} username={currentUser.username} />;
+      return (
+        <Suspense fallback={<LoadingFallback />}>
+          <Dashboard onNavigate={onNavigate} username={currentUser.username} />
+        </Suspense>
+      );
   }
 }

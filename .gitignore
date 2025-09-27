@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env*
+*.log
+.DS_Store
+.vscode/
+.idea/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+build/
+.nyc_output/
+coverage/
+lib-cov/
