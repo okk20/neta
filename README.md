@@ -46,6 +46,11 @@ A comprehensive web application for managing school examinations, student record
 
 This project uses MSW (Mock Service Worker) to simulate API calls. All API endpoints are mocked and no backend server is required for frontend development.
 
+## Database Configuration
+
+The application can be connected to a MongoDB database using the following connection string:
+`mongodb+srv://takyiamy2019_db:sjtaoOULf3Nyr9sb@sems-cluster.atwkdw2.mongodb.net/?retryWrites=true&w=majority&appName=Sems-Cluster`
+
 ## Deployment Options
 
 ### Frontend Only (Current Vercel Deployment)
@@ -53,25 +58,42 @@ The frontend has been deployed to Vercel at: https://netd-r956jr57j-takyiamy2019
 
 Note: For full functionality, you'll need to host the API routes separately.
 
-### Alternative Deployment Options
+### Full Stack Deployment Options
 
 If you need both frontend and backend functionality, consider these alternatives:
 
-1. **Netlify**: Supports both static hosting and serverless functions
-   - Frontend will be served from the `dist` directory
-   - API routes can be deployed as Netlify functions
-
-2. **Railway**: For deploying the full-stack application with a proper backend
-   - Move the API routes to a proper Node.js/Express backend
-   - Deploy both frontend and backend separately
-
-3. **Render**: Supports static sites and web services
+1. **Render**: 
    - Deploy frontend as static site
-   - Deploy backend API as web service
+   - Deploy backend API as web service connected to MongoDB
+   - Use the server.js file provided for the backend
 
-4. **Firebase Hosting + Functions**: 
-   - Host the frontend on Firebase Hosting
-   - Deploy API routes as Firebase Functions
+2. **Railway**: 
+   - For deploying the full-stack application with MongoDB integration
+   - Deploy both frontend and backend with environment variables
+
+3. **Heroku**: 
+   - Deploy the backend server connected to MongoDB
+   - The server.js file is ready for Heroku deployment
+
+4. **Netlify**: 
+   - Frontend hosting with serverless functions
+   - Backend API can be deployed separately with MongoDB
+
+5. **AWS/GCP/DO**: 
+   - Self-hosted deployment with full control
+   - Deploy the Express server with MongoDB connection
+
+## Backend API Server
+
+A Node.js/Express server is provided in `server.js` that includes:
+- All API endpoints for student, teacher, subject, score management
+- Authentication endpoints
+- Settings management
+- Connection to MongoDB database
+
+To run the backend server locally:
+1. Update the database connection in server.js to use your MongoDB connection string
+2. Run: `npm run backend`
 
 ## Development API Routes
 
